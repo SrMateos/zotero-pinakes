@@ -1,0 +1,1 @@
+pref("s2ApiKey", "");

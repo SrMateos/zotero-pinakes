@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#6b7785" stroke-width="1.2" stroke-linecap="round">
+  <!-- A tablet with catalogue lines: Callimachus' Pinakes. -->
+  <rect x="2.5" y="1.5" width="11" height="13" rx="1.5"/>
+  <path d="M5 5h6M5 8h6M5 11h4"/>
+</svg>

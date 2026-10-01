@@ -1,0 +1,25 @@
+<linkset>
+  <html:link rel="localization" href="__addonRef__-preferences.ftl" />
+</linkset>
+<vbox id="zotero-prefpane-__addonRef__">
+  <groupbox>
+    <label><html:h2 data-l10n-id="pref-title"></html:h2></label>
+    <html:label
+      for="zotero-prefpane-__addonRef__-s2key"
+      data-l10n-id="pref-s2-key"
+    ></html:label>
+    <html:input
+      type="password"
+      id="zotero-prefpane-__addonRef__-s2key"
+      preference="s2ApiKey"
+      style="width: 30em"
+    ></html:input>
+    <description data-l10n-id="pref-s2-key-help"></description>
+  </groupbox>
+  <vbox>
+    <html:label
+      data-l10n-id="pref-about"
+      data-l10n-args='{"time": "__buildTime__","name": "__addonName__","version":"__buildVersion__"}'
+    ></html:label>
+  </vbox>
+</vbox>
