@@ -10,6 +10,7 @@ import {
   normalizeDOI,
   normalizeTitle,
   parseArxivId,
+  normalizeForSearch,
   splitName,
 } from "../../src/modules/identifiers.ts";
 
@@ -83,4 +84,11 @@ test("abstractFromInvertedIndex", () => {
     "hello world hello",
   );
   assert.equal(abstractFromInvertedIndex(null), undefined);
+});
+
+test("normalizeForSearch", () => {
+  assert.equal(
+    normalizeForSearch("Café, Résumé: 10.1145/X"),
+    "cafe resume 10.1145/x",
+  );
 });

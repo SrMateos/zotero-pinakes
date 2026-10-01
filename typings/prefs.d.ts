@@ -8,6 +8,8 @@ declare namespace _ZoteroTypes {
   interface Prefs {
     PluginPrefsMap: {
       "s2ApiKey": string;
+      "defaultSource": string;
+      "targetMode": string;
     };
   }
 }

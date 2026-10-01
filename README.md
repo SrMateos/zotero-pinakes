@@ -39,15 +39,37 @@ the works a paper cites.
 - References that are already in the target library show **In library**
   instead of Import. They are matched by DOI, then arXiv ID, then normalised
   title. Click it to select the existing item.
+- References are loaded as soon as an item is shown, so the list is ready
+  when you open the section from the side navigation. In the library view
+  the request waits 0.6 s, so that moving through items with the arrow keys
+  does not send a request per item.
 - Fetched lists are cached in memory and as JSON files in
   `<Zotero data directory>/pinakes/`. **Refresh** re-fetches the list.
+- **Filter** box: type words to keep only references whose title, authors,
+  venue, year, DOI or arXiv ID contain all of them (accents and case are
+  ignored).
+- **Batch import**: tick references (shift-click selects a range) and press
+  **Import selected**, or press **Import all not in library**. With a filter
+  active, both act only on the references shown. A progress bar shows the
+  current item and can be cancelled. Imports run one after another. A
+  summary at the end reports how many were imported, how many were created
+  from metadata and how many failed; failed rows show the reason in red. If
+  you switch to another item mid-batch, the batch keeps going and reports in
+  a Zotero progress window.
 
 ### Where imports go
 
-The target is the **collection currently selected in the main window**. If
-no collection is selected, items go to the root of the library that holds
-the PDF. The current target is shown at the top of the section
-("Import to: …").
+By default the target is the **collection currently selected in the main
+window**. If no collection is selected, items go to the root of the library
+that holds the PDF. You can change this in Settings → Pinakes to "the
+collection that contains the paper being read" or "always the library
+root". The current target is shown at the top of the section ("Import to:
+…").
+
+When the target is the collection you are viewing, Zotero selects each new
+item, just as "Add Item by Identifier" does. In the library view Pinakes
+then selects the paper you were looking at again, so its reference list
+stays open.
 
 The item is always created **in the library that owns the target
 collection**: `libraryID` and `collections` are both passed to
@@ -85,9 +107,16 @@ release build is not minified, so `content/scripts/pinakes.js` inside the
 
 ## Settings
 
-Go to **Settings → Pinakes**. There you can set an optional Semantic Scholar
-API key. Without a key, Semantic Scholar shares a low request rate among all
-anonymous users, so you may see 429 retries more often.
+**Settings → Pinakes** has:
+
+- **Semantic Scholar API key** (optional). Without a key, Semantic Scholar
+  shares a low request rate among all anonymous users, so you may see 429
+  retries more often.
+- **Reference source**: which API to try first (Semantic Scholar or
+  OpenAlex). The other one is always tried as a fallback.
+- **Where imported references go**: the selected collection (default), the
+  collection that contains the paper being read, or always the library
+  root.
 
 ## Debugging
 
@@ -105,6 +134,7 @@ npm start               # dev build, launches Zotero with the plugin, hot reload
 npm run build           # production build -> .scaffold/build/pinakes.xpi
 npm test                # unit tests (Node, no Zotero needed)
 npm run test:zotero     # integration tests in a throwaway Zotero profile (needs network)
+                        # Zotero's output goes to .scaffold/test/zotero-output.log
 npm run lint:check
 ```
 

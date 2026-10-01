@@ -26,18 +26,33 @@ export interface ImportResult {
   method: ImportMethod;
 }
 
+/** How the import target is chosen (preference "targetMode"). */
+export type TargetMode = "selected" | "parent" | "root";
+
 /**
- * The collection currently selected in the main window, or, if no
- * collection is selected, the root of `fallbackLibraryID` (the library of
- * the open PDF).
+ * Where imported references go, for references cited by `citing`:
+ *
+ * - "selected" (default): the collection selected in the main window; if no
+ *   collection is selected, the root of the citing item's library.
+ * - "parent": the first collection that contains the citing item; if it is
+ *   in none, the root of its library.
+ * - "root": always the root of the citing item's library.
  */
-export function resolveTarget(fallbackLibraryID: number): ImportTarget {
-  let collection: Zotero.Collection | undefined;
-  try {
-    const pane = Zotero.getMainWindow()?.ZoteroPane;
-    collection = pane?.getSelectedCollections()?.[0];
-  } catch (e) {
-    log("Could not read the selected collection", e);
+export function resolveTarget(
+  citing: Zotero.Item,
+  mode: TargetMode = "selected",
+): ImportTarget {
+  let collection: Zotero.Collection | undefined | false;
+  if (mode === "selected") {
+    try {
+      const pane = Zotero.getMainWindow()?.ZoteroPane;
+      collection = pane?.getSelectedCollections()?.[0];
+    } catch (e) {
+      log("Could not read the selected collection", e);
+    }
+  } else if (mode === "parent") {
+    const first = citing.getCollections()[0];
+    collection = first ? Zotero.Collections.get(first) : undefined;
   }
   if (collection) {
     return {
@@ -47,9 +62,13 @@ export function resolveTarget(fallbackLibraryID: number): ImportTarget {
     };
   }
   return {
-    libraryID: fallbackLibraryID,
-    label: libraryName(fallbackLibraryID),
+    libraryID: citing.libraryID,
+    label: libraryName(citing.libraryID),
   };
+}
+
+export function sameTarget(a?: ImportTarget, b?: ImportTarget) {
+  return a?.libraryID === b?.libraryID && a?.collectionID === b?.collectionID;
 }
 
 function libraryName(libraryID: number) {
@@ -188,6 +207,6 @@ async function createFromMetadata(
   log(
     `Creating ${itemType} from metadata in libraryID=${target.libraryID} collection=${target.collectionID ?? "none"}: ${ref.title}`,
   );
-  await item.saveTx();
+  await item.saveTx({ skipSelect: true });
   return item;
 }

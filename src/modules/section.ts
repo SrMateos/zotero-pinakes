@@ -4,12 +4,16 @@
  */
 import { config } from "../../package.json";
 import { log } from "../utils/log";
+import { getPref } from "../utils/prefs";
 import { getCached, setCached } from "./cache";
+import { normalizeForSearch } from "./identifiers";
 import {
   checkTargetEditable,
   importReference,
   resolveTarget,
+  sameTarget,
   type ImportTarget,
+  type TargetMode,
 } from "./importer";
 import { findInLibrary, getPaperId } from "./library";
 import { describe, fetchReferences, sourceLabel } from "./sources";
@@ -18,23 +22,89 @@ import type { PaperId, Reference, ReferenceList } from "./types";
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const ICON = `chrome://${config.addonRef}/content/icons/pinakes.svg`;
 
+/**
+ * In the library view, wait this long before fetching an uncached list, so
+ * that scrolling through items with the arrow keys does not fire a request
+ * per item. The reader fetches immediately.
+ */
+const LIBRARY_FETCH_DELAY_MS = 600;
+
 /** Per-section state, keyed by the section body element. */
 interface SectionState {
   body: HTMLElement;
   doc: Document;
   item?: Zotero.Item;
+  tabType?: string;
   paperId?: PaperId;
   list?: ReferenceList;
+  loading: boolean;
+  /** Set once loading has started for `item`. */
+  started: boolean;
   /** Reference index -> Zotero item ID of the matching library item. */
   matches: Map<number, number>;
   target?: ImportTarget;
   /** Incremented on every load; stale async work checks it and bails out. */
   token: number;
   setSummary?: (summary: string) => void;
+  /** Row elements by reference index. */
+  rows: Map<number, HTMLElement>;
+  /** Checked reference indexes. */
+  selected: Set<number>;
+  lastClicked?: number;
+  filter: string[];
+  batch?: { cancelled: boolean };
+  /** Number of imports in progress, and when the last one ended. */
+  importing: number;
+  lastImportEnd: number;
 }
 
 const states = new Map<HTMLElement, SectionState>();
 let paneID: string | false = false;
+
+function newState(body: HTMLElement, doc: Document): SectionState {
+  return {
+    body,
+    doc,
+    loading: false,
+    started: false,
+    matches: new Map(),
+    token: 0,
+    rows: new Map(),
+    selected: new Set(),
+    filter: [],
+    importing: 0,
+    lastImportEnd: 0,
+  };
+}
+
+/**
+ * Zotero selects a newly saved item when it appears in the items list being
+ * viewed (as "Add Item by Identifier" does), and Translate.Search offers no
+ * way to prevent it. An item added in the last minute while an import is
+ * running is taken to be one of ours.
+ */
+function isJustImported(item: Zotero.Item) {
+  const added = Zotero.Date.sqlToDate(item.dateAdded, true) as Date | false;
+  return !!added && Date.now() - added.getTime() < 60_000;
+}
+
+/**
+ * After an import in the library view, select the citing item again so the
+ * item pane goes back to its reference list.
+ */
+function restoreSelection(state: SectionState) {
+  if (state.tabType !== "library" || !state.item) return;
+  if (state.importing || state.batch) return;
+  const pane = Zotero.getMainWindow()?.ZoteroPane;
+  const selected = pane?.getSelectedItems() ?? [];
+  if (
+    selected.length === 1 &&
+    selected[0].id !== state.item.id &&
+    isJustImported(selected[0])
+  ) {
+    void pane!.selectItem(state.item.id);
+  }
+}
 
 export function registerSection() {
   paneID = Zotero.ItemPaneManager.registerSection({
@@ -43,37 +113,59 @@ export function registerSection() {
     header: { l10nID: `${config.addonRef}-section-header`, icon: ICON },
     sidenav: { l10nID: `${config.addonRef}-section-sidenav`, icon: ICON },
     onInit: ({ body, doc }) => {
-      states.set(body, { body, doc, matches: new Map(), token: 0 });
+      states.set(body, newState(body, doc));
     },
     onDestroy: ({ body }) => {
+      const state = states.get(body);
+      if (state?.batch) state.batch.cancelled = true;
       states.delete(body);
     },
     onItemChange: ({ item, setEnabled }) => {
       setEnabled(!!citingItem(item));
       return true;
     },
-    onRender: ({ body, item }) => {
-      const state = states.get(body);
-      if (!state) return;
-      const target = citingItem(item);
-      // Re-rendering the same item (e.g. after an edit) keeps the list.
-      if (state.item?.id === target?.id && state.list) return;
-      state.item = target;
-      state.list = undefined;
-      state.matches = new Map();
-      renderSkeleton(state);
-    },
-    onAsyncRender: async ({ body, setSectionSummary }) => {
+    // Everything happens in onRender (not onAsyncRender, which Zotero only
+    // calls once the section is scrolled into view), so the list is ready
+    // by the time the section is opened from the side navigation.
+    onRender: ({ body, item, tabType, setSectionSummary }) => {
       const state = states.get(body);
       if (!state) return;
       state.setSummary = setSectionSummary;
-      if (!state.list) await load(state, false);
+      state.tabType = tabType;
+      const citing = citingItem(item);
+      // Zotero moved the selection to an item we are importing: keep the
+      // list (restoreSelection() selects the citing item again afterwards).
+      const importing =
+        state.importing ||
+        state.batch ||
+        Date.now() - state.lastImportEnd < 3000;
+      if (importing && citing && isJustImported(citing)) {
+        setTimeout(() => restoreSelection(state), 0);
+        return;
+      }
+      // Re-rendering the same item (e.g. after an edit, or after
+      // setSectionSummary) keeps what is shown; only Refresh reloads it.
+      // Reloading here would loop: load -> setSummary -> render -> load.
+      if (state.started && state.item?.id === citing?.id) return;
+      // A running batch import keeps going in the background (it holds its
+      // own list and target) and reports through a progress window.
+      Object.assign(state, newState(body, state.doc), {
+        item: citing,
+        tabType,
+        setSummary: setSectionSummary,
+        started: true,
+      });
+      renderSkeleton(state);
+      void load(state, false);
     },
   });
   log(`Registered item pane section: ${paneID}`);
 }
 
 export function unregisterSection() {
+  for (const state of states.values()) {
+    if (state.batch) state.batch.cancelled = true;
+  }
   if (paneID) Zotero.ItemPaneManager.unregisterSection(paneID);
   paneID = false;
   states.clear();
@@ -82,7 +174,7 @@ export function unregisterSection() {
 /** Re-check "in library" marks in every open section (after item changes). */
 export async function refreshLibraryMarks() {
   for (const state of states.values()) {
-    if (state.list) await markInLibrary(state, state.token);
+    if (state.list && !state.batch) await markInLibrary(state, state.token);
   }
 }
 
@@ -93,6 +185,10 @@ function citingItem(item: Zotero.Item | undefined | null) {
   return item.isRegularItem() ? item : undefined;
 }
 
+function currentTarget(state: SectionState) {
+  return resolveTarget(state.item!, getPref("targetMode") as TargetMode);
+}
+
 // ---------------------------------------------------------------------------
 // Loading
 // ---------------------------------------------------------------------------
@@ -101,7 +197,24 @@ async function load(state: SectionState, force: boolean) {
   const token = ++state.token;
   const item = state.item;
   if (!item) return;
+  state.loading = true;
+  try {
+    const list = await loadList(state, item, force, token);
+    if (!list || state.token !== token) return;
+    state.list = list;
+    renderList(state);
+    await markInLibrary(state, token);
+  } finally {
+    if (state.token === token) state.loading = false;
+  }
+}
 
+async function loadList(
+  state: SectionState,
+  item: Zotero.Item,
+  force: boolean,
+  token: number,
+): Promise<ReferenceList | undefined> {
   const paperId = getPaperId(item);
   state.paperId = paperId;
   if (!paperId) {
@@ -111,41 +224,44 @@ async function load(state: SectionState, force: boolean) {
       "No identifier: this item has no DOI and no arXiv ID (checked the DOI, URL, Extra and Archive ID fields). Add one to see its references.",
     );
     state.setSummary?.("No identifier");
-    return;
+    return undefined;
   }
 
-  let list = force ? undefined : await getCached(item, paperId);
-  if (list) {
+  const cached = force ? undefined : await getCached(item, paperId);
+  if (cached) {
     log(`Using cached references for ${describe(paperId)}`);
-  } else {
-    setStatus(state, "busy", `Fetching references for ${describe(paperId)}…`);
-    try {
-      list = await fetchReferences(paperId, (message) => {
-        if (state.token === token) setStatus(state, "busy", message);
-      });
-      await setCached(item, list);
-    } catch (e) {
-      if (state.token !== token) return;
-      const message = e instanceof Error ? e.message : String(e);
-      setStatus(
-        state,
-        "error",
-        `Could not load references for ${describe(paperId)}.\n${message}`,
-      );
-      state.setSummary?.("Error");
-      return;
-    }
+    return cached;
   }
-  if (state.token !== token) return;
-  state.list = list;
-  renderList(state);
-  await markInLibrary(state, token);
+
+  if (state.tabType !== "reader") {
+    await Zotero.Promise.delay(LIBRARY_FETCH_DELAY_MS);
+    if (state.token !== token) return undefined;
+  }
+
+  setStatus(state, "busy", `Fetching references for ${describe(paperId)}…`);
+  try {
+    const list = await fetchReferences(paperId, (message) => {
+      if (state.token === token) setStatus(state, "busy", message);
+    });
+    await setCached(item, list);
+    return list;
+  } catch (e) {
+    if (state.token !== token) return undefined;
+    const message = e instanceof Error ? e.message : String(e);
+    setStatus(
+      state,
+      "error",
+      `Could not load references for ${describe(paperId)}.\n${message}`,
+    );
+    state.setSummary?.("Error");
+    return undefined;
+  }
 }
 
 /** Update the import target and the "In library" marks. */
 async function markInLibrary(state: SectionState, token: number) {
   if (!state.item || !state.list) return;
-  const target = resolveTarget(state.item.libraryID);
+  const target = currentTarget(state);
   state.target = target;
   renderTarget(state);
   try {
@@ -155,14 +271,16 @@ async function markInLibrary(state: SectionState, token: number) {
     );
     if (state.token !== token) return;
     state.matches = matches;
-    for (const ref of state.list.references) updateRowActions(state, ref);
+    for (const index of matches.keys()) state.selected.delete(index);
+    for (const ref of state.list.references) updateRow(state, ref);
+    updateBatchBar(state);
   } catch (e) {
     log("Could not check which references are in the library", e);
   }
 }
 
 // ---------------------------------------------------------------------------
-// Rendering
+// Rendering helpers
 // ---------------------------------------------------------------------------
 
 function h<K extends keyof HTMLElementTagNameMap>(
@@ -186,44 +304,6 @@ function button(doc: Document, label: string, onClick: (e: Event) => void) {
   return el;
 }
 
-function renderSkeleton(state: SectionState) {
-  const { doc, body } = state;
-  body.replaceChildren();
-  const root = h(doc, "div", "pinakes-root");
-
-  const toolbar = h(doc, "div", "pinakes-toolbar");
-  toolbar.append(
-    h(doc, "span", "pinakes-target"),
-    h(doc, "span", "pinakes-source"),
-    button(doc, "Refresh", () => {
-      state.list = undefined;
-      renderSkeleton(state);
-      void load(state, true);
-    }),
-  );
-  root.append(
-    toolbar,
-    h(doc, "div", "pinakes-status"),
-    h(doc, "ol", "pinakes-list"),
-  );
-
-  // The selected collection can change while the reader is open; re-check
-  // the target when the pointer enters the section.
-  root.addEventListener("mouseenter", () => {
-    if (!state.item || !state.list) return;
-    const target = resolveTarget(state.item.libraryID);
-    if (
-      target.libraryID !== state.target?.libraryID ||
-      target.collectionID !== state.target?.collectionID
-    ) {
-      void markInLibrary(state, state.token);
-    }
-  });
-
-  body.append(root);
-  setStatus(state, "busy", "Loading…");
-}
-
 function query<T extends Element = HTMLElement>(
   state: SectionState,
   sel: string,
@@ -243,30 +323,204 @@ function setStatus(
   status.hidden = kind === "none";
 }
 
+// ---------------------------------------------------------------------------
+// Skeleton: toolbar, filter, batch bar, progress, status, list
+// ---------------------------------------------------------------------------
+
+function renderSkeleton(state: SectionState) {
+  const { doc, body } = state;
+  body.replaceChildren();
+  const root = h(doc, "div", "pinakes-root");
+
+  const toolbar = h(doc, "div", "pinakes-toolbar");
+  toolbar.append(
+    h(doc, "span", "pinakes-target"),
+    h(doc, "span", "pinakes-source"),
+    button(doc, "Refresh", () => {
+      if (state.batch) return;
+      const { item, tabType, setSummary } = state;
+      Object.assign(state, newState(state.body, state.doc), {
+        item,
+        tabType,
+        setSummary,
+        started: true,
+      });
+      renderSkeleton(state);
+      void load(state, true);
+    }),
+  );
+
+  const filterBar = h(doc, "div", "pinakes-filterbar");
+  const filter = h(doc, "input", "pinakes-filter");
+  filter.type = "search";
+  filter.placeholder = "Filter by title, author, venue, year…";
+  filter.addEventListener("input", () => {
+    state.filter = normalizeForSearch(filter.value)
+      .split(/\s+/)
+      .filter(Boolean);
+    applyFilter(state);
+  });
+  filterBar.append(filter, h(doc, "span", "pinakes-count"));
+  filterBar.hidden = true;
+
+  const batchBar = h(doc, "div", "pinakes-batchbar");
+  const selectAll = h(doc, "input", "pinakes-select-all");
+  selectAll.type = "checkbox";
+  selectAll.title = "Select all shown references that are not in the library";
+  selectAll.addEventListener("change", () => {
+    for (const ref of shownRefs(state)) {
+      if (state.matches.has(ref.index)) continue;
+      if (selectAll.checked) state.selected.add(ref.index);
+      else state.selected.delete(ref.index);
+      updateRow(state, ref);
+    }
+    updateBatchBar(state);
+  });
+  const importSelected = button(doc, "Import selected", () => {
+    const refs = shownRefs(state).filter(
+      (r) => state.selected.has(r.index) && !state.matches.has(r.index),
+    );
+    void runBatch(state, refs);
+  });
+  importSelected.classList.add("pinakes-import-selected");
+  const importAll = button(doc, "Import all not in library", () => {
+    const refs = shownRefs(state).filter((r) => !state.matches.has(r.index));
+    void runBatch(state, refs);
+  });
+  importAll.classList.add("pinakes-import-all");
+  batchBar.append(selectAll, importSelected, importAll);
+  batchBar.hidden = true;
+
+  const progress = h(doc, "div", "pinakes-progress");
+  progress.append(
+    h(doc, "progress", "pinakes-progress-bar"),
+    h(doc, "span", "pinakes-progress-text"),
+    button(doc, "Cancel", () => {
+      if (state.batch) state.batch.cancelled = true;
+    }),
+  );
+  progress.hidden = true;
+
+  root.append(
+    toolbar,
+    filterBar,
+    batchBar,
+    progress,
+    h(doc, "div", "pinakes-status"),
+    h(doc, "ol", "pinakes-list"),
+  );
+
+  // The selected collection can change while the reader is open; re-check
+  // the target when the pointer enters the section.
+  root.addEventListener("mouseenter", () => {
+    if (!state.item || !state.list || state.batch) return;
+    if (!sameTarget(currentTarget(state), state.target)) {
+      void markInLibrary(state, state.token);
+    }
+  });
+
+  body.append(root);
+  setStatus(state, "busy", "Loading…");
+}
+
 function renderTarget(state: SectionState) {
   const el = query(state, ".pinakes-target");
   if (!el || !state.target) return;
   el.textContent = `Import to: ${state.target.label}`;
+  const mode = getPref("targetMode") as TargetMode;
   el.title =
-    "The collection selected in the main window, or the library of this item if no collection is selected.";
+    mode === "parent"
+      ? "The first collection containing this item (or its library root). Change in Settings > Pinakes."
+      : mode === "root"
+        ? "The library of this item. Change in Settings > Pinakes."
+        : "The collection selected in the main window, or the library of this item if no collection is selected. Change in Settings > Pinakes.";
 }
 
 function renderList(state: SectionState) {
   const list = state.list!;
   const ol = query(state, ".pinakes-list");
   if (!ol) return;
-  ol.replaceChildren(...list.references.map((ref) => renderRow(state, ref)));
+  state.rows.clear();
+  ol.replaceChildren(
+    ...list.references.map((ref) => {
+      const row = renderRow(state, ref);
+      state.rows.set(ref.index, row);
+      return row;
+    }),
+  );
 
   const source = query(state, ".pinakes-source");
   if (source) {
     source.textContent = `${list.references.length} from ${sourceLabel(list.source)}`;
     source.title = `Fetched ${new Date(list.fetchedAt).toLocaleString()}`;
   }
+  const hasRefs = list.references.length > 0;
+  query(state, ".pinakes-filterbar")!.hidden = !hasRefs;
+  query(state, ".pinakes-batchbar")!.hidden = !hasRefs;
   // Fallback notes (e.g. Semantic Scholar was rate limited) stay visible.
   if (list.notes.length) setStatus(state, "info", list.notes.join("\n"));
   else setStatus(state, "none");
   state.setSummary?.(`${list.references.length} references`);
+  applyFilter(state);
 }
+
+// ---------------------------------------------------------------------------
+// Filter
+// ---------------------------------------------------------------------------
+
+const searchText = new WeakMap<Reference, string>();
+
+function haystack(ref: Reference) {
+  let text = searchText.get(ref);
+  if (text === undefined) {
+    text = normalizeForSearch(
+      [
+        ref.title,
+        ref.authors.join(" "),
+        ref.venue,
+        ref.year,
+        ref.doi,
+        ref.arxiv,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    );
+    searchText.set(ref, text);
+  }
+  return text;
+}
+
+function isShown(state: SectionState, ref: Reference) {
+  if (!state.filter.length) return true;
+  const text = haystack(ref);
+  return state.filter.every((token) => text.includes(token));
+}
+
+function shownRefs(state: SectionState) {
+  return (state.list?.references ?? []).filter((r) => isShown(state, r));
+}
+
+function applyFilter(state: SectionState) {
+  if (!state.list) return;
+  let shown = 0;
+  for (const ref of state.list.references) {
+    const visible = isShown(state, ref);
+    const row = state.rows.get(ref.index);
+    if (row) row.hidden = !visible;
+    if (visible) shown++;
+  }
+  const count = query(state, ".pinakes-count");
+  if (count) {
+    count.textContent = state.filter.length
+      ? `${shown} of ${state.list.references.length}`
+      : "";
+  }
+  updateBatchBar(state);
+}
+
+// ---------------------------------------------------------------------------
+// Rows
+// ---------------------------------------------------------------------------
 
 function authorYear(ref: Reference) {
   const first = ref.authors[0];
@@ -284,22 +538,21 @@ function renderRow(state: SectionState, ref: Reference) {
   const li = h(doc, "li", "pinakes-row");
   li.dataset.index = String(ref.index);
 
+  const check = h(doc, "input", "pinakes-check");
+  check.type = "checkbox";
+  check.addEventListener("click", (e) => onCheck(state, ref, e as MouseEvent));
+
   const main = h(doc, "div", "pinakes-row-main");
   main.title = ref.abstract
     ? ref.abstract.length > 600
       ? `${ref.abstract.slice(0, 600)}…`
       : ref.abstract
     : "No abstract available. Click to expand.";
-  main.append(
-    h(doc, "span", "pinakes-num", `${ref.index}`),
-    (() => {
-      const text = h(doc, "div", "pinakes-text");
-      text.append(h(doc, "div", "pinakes-title", ref.title));
-      const meta = [authorYear(ref), ref.venue].filter(Boolean).join(" · ");
-      text.append(h(doc, "div", "pinakes-meta", meta));
-      return text;
-    })(),
-  );
+  const text = h(doc, "div", "pinakes-text");
+  text.append(h(doc, "div", "pinakes-title", ref.title));
+  const meta = [authorYear(ref), ref.venue].filter(Boolean).join(" · ");
+  text.append(h(doc, "div", "pinakes-meta", meta));
+  main.append(check, h(doc, "span", "pinakes-num", `${ref.index}`), text);
   main.addEventListener("click", () => li.classList.toggle("pinakes-expanded"));
 
   const abstract = h(
@@ -311,15 +564,53 @@ function renderRow(state: SectionState, ref: Reference) {
   const actions = h(doc, "div", "pinakes-actions");
   li.append(main, abstract, actions);
   fillActions(state, ref, actions);
+  updateCheck(state, ref, check);
   return li;
 }
 
-function updateRowActions(state: SectionState, ref: Reference) {
-  const actions = query(
-    state,
-    `.pinakes-row[data-index="${ref.index}"] .pinakes-actions`,
-  );
+function updateCheck(
+  state: SectionState,
+  ref: Reference,
+  check: HTMLInputElement,
+) {
+  const inLibrary = state.matches.has(ref.index);
+  check.disabled = inLibrary || !!state.batch;
+  check.checked = !inLibrary && state.selected.has(ref.index);
+  check.style.visibility = inLibrary ? "hidden" : "";
+}
+
+function onCheck(state: SectionState, ref: Reference, event: MouseEvent) {
+  event.stopPropagation();
+  const checked = (event.target as HTMLInputElement).checked;
+  const indexes = [ref.index];
+  // Shift-click selects the range of shown rows since the last click.
+  if (event.shiftKey && state.lastClicked !== undefined) {
+    const shown = shownRefs(state).map((r) => r.index);
+    const a = shown.indexOf(state.lastClicked);
+    const b = shown.indexOf(ref.index);
+    if (a >= 0 && b >= 0) {
+      indexes.push(...shown.slice(Math.min(a, b), Math.max(a, b) + 1));
+    }
+  }
+  state.lastClicked = ref.index;
+  for (const index of indexes) {
+    if (state.matches.has(index)) continue;
+    if (checked) state.selected.add(index);
+    else state.selected.delete(index);
+  }
+  for (const r of state.list!.references) {
+    if (indexes.includes(r.index)) updateRow(state, r);
+  }
+  updateBatchBar(state);
+}
+
+function updateRow(state: SectionState, ref: Reference) {
+  const row = state.rows.get(ref.index);
+  if (!row) return;
+  const actions = row.querySelector(".pinakes-actions") as HTMLElement | null;
   if (actions && !actions.dataset.busy) fillActions(state, ref, actions);
+  const check = row.querySelector(".pinakes-check") as HTMLInputElement | null;
+  if (check) updateCheck(state, ref, check);
 }
 
 function fillActions(
@@ -339,11 +630,11 @@ function fillActions(
     inLib.title = "Already in the target library. Click to show it.";
     actions.append(inLib);
   } else {
-    const importBtn = button(
-      doc,
-      "Import",
-      () => void onImport(state, ref, actions),
-    );
+    const importBtn = button(doc, "Import", () => {
+      void importOne(state, ref, currentTarget(state));
+    });
+    importBtn.classList.add("pinakes-import");
+    importBtn.disabled = !!state.batch;
     importBtn.title = ref.doi
       ? `Import by DOI ${ref.doi}`
       : ref.arxiv
@@ -372,49 +663,189 @@ function fillActions(
   actions.append(copy, open);
 }
 
-async function onImport(
+// ---------------------------------------------------------------------------
+// Importing
+// ---------------------------------------------------------------------------
+
+/**
+ * Import one reference and update its row. Returns the import method, or
+ * undefined if it failed (the error is shown in the row).
+ */
+async function importOne(
   state: SectionState,
   ref: Reference,
-  actions: HTMLElement,
+  target: ImportTarget,
+  list = state.list,
 ) {
-  if (!state.item) return;
-  const target = resolveTarget(state.item.libraryID);
-  const targetChanged =
-    target.libraryID !== state.target?.libraryID ||
-    target.collectionID !== state.target?.collectionID;
-  state.target = target;
-  renderTarget(state);
+  if (!list) return undefined;
+  // The section may switch to another item while a batch is running; the
+  // import still happens, but only the list it belongs to is updated.
+  const live = () => state.list === list;
+  const targetChanged = !sameTarget(target, state.target);
+  if (live()) {
+    state.target = target;
+    renderTarget(state);
+  }
 
-  actions.dataset.busy = "1";
-  const importBtn = actions.querySelector("button");
+  const actions = (live() &&
+    state.rows
+      .get(ref.index)
+      ?.querySelector(".pinakes-actions")) as HTMLElement | null;
+  if (actions) actions.dataset.busy = "1";
+  const importBtn = actions?.querySelector(
+    ".pinakes-import",
+  ) as HTMLButtonElement | null;
   if (importBtn) {
     importBtn.disabled = true;
     importBtn.textContent = "Importing…";
   }
-  actions.querySelector(".pinakes-row-error")?.remove();
 
+  let result: Awaited<ReturnType<typeof importReference>> | undefined;
+  let error: string | undefined;
+  state.importing++;
   try {
     checkTargetEditable(target);
-    const { item, method } = await importReference(ref, target);
+    result = await importReference(ref, target);
     log(
-      `Imported reference ${ref.index} via ${method} as item ${item.id} (library ${item.libraryID})`,
+      `Imported reference ${ref.index} via ${result.method} as item ${result.item.id} (library ${result.item.libraryID})`,
     );
-    state.matches.set(ref.index, item.id);
-    delete actions.dataset.busy;
-    fillActions(state, ref, actions);
-    if (method === "metadata") {
-      actions.append(
-        h(state.doc, "span", "pinakes-row-note", "Created from API metadata"),
-      );
+    if (live()) {
+      state.matches.set(ref.index, result.item.id);
+      state.selected.delete(ref.index);
     }
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
+    error = e instanceof Error ? e.message : String(e);
     log(`Import of reference ${ref.index} failed`, e);
-    delete actions.dataset.busy;
-    fillActions(state, ref, actions);
+  } finally {
+    state.importing--;
+    state.lastImportEnd = Date.now();
+  }
+  if (!state.batch) restoreSelection(state);
+  if (!actions || !live()) return result?.method;
+  delete actions.dataset.busy;
+  updateRow(state, ref);
+  if (result?.method === "metadata") {
     actions.append(
-      h(state.doc, "span", "pinakes-row-error", `Import failed: ${message}`),
+      h(state.doc, "span", "pinakes-row-note", "Created from API metadata"),
     );
   }
-  if (targetChanged) void markInLibrary(state, state.token);
+  if (error) {
+    actions.append(
+      h(state.doc, "span", "pinakes-row-error", `Import failed: ${error}`),
+    );
+  }
+  updateBatchBar(state);
+  if (targetChanged && !state.batch) void markInLibrary(state, state.token);
+  return result?.method;
+}
+
+function updateBatchBar(state: SectionState) {
+  const shown = shownRefs(state);
+  const notInLibrary = shown.filter((r) => !state.matches.has(r.index));
+  const selected = notInLibrary.filter((r) => state.selected.has(r.index));
+  const busy = !!state.batch;
+
+  const importSelected = query<HTMLButtonElement>(
+    state,
+    ".pinakes-import-selected",
+  );
+  if (importSelected) {
+    importSelected.textContent = `Import selected (${selected.length})`;
+    importSelected.disabled = busy || !selected.length;
+  }
+  const importAll = query<HTMLButtonElement>(state, ".pinakes-import-all");
+  if (importAll) {
+    importAll.textContent = state.filter.length
+      ? `Import all shown not in library (${notInLibrary.length})`
+      : `Import all not in library (${notInLibrary.length})`;
+    importAll.disabled = busy || !notInLibrary.length;
+  }
+  const selectAll = query<HTMLInputElement>(state, ".pinakes-select-all");
+  if (selectAll) {
+    selectAll.disabled = busy || !notInLibrary.length;
+    selectAll.checked =
+      notInLibrary.length > 0 && selected.length === notInLibrary.length;
+    selectAll.indeterminate =
+      selected.length > 0 && selected.length < notInLibrary.length;
+  }
+}
+
+function setProgress(state: SectionState, done: number, total: number) {
+  const progress = query(state, ".pinakes-progress");
+  if (!progress) return;
+  progress.hidden = false;
+  const bar = progress.querySelector("progress") as HTMLProgressElement;
+  bar.max = total;
+  bar.value = done;
+  progress.querySelector(".pinakes-progress-text")!.textContent =
+    `Importing ${Math.min(done + 1, total)} of ${total}…`;
+}
+
+/** Import references one after another, with progress and cancel. */
+async function runBatch(state: SectionState, refs: Reference[]) {
+  if (state.batch || !state.item || !refs.length) return;
+  const target = currentTarget(state);
+  try {
+    checkTargetEditable(target);
+  } catch (e) {
+    setStatus(state, "error", e instanceof Error ? e.message : String(e));
+    return;
+  }
+  const batch = { cancelled: false };
+  const list = state.list!;
+  const live = () => state.list === list;
+  state.batch = batch;
+  for (const ref of state.list!.references) updateRow(state, ref);
+  updateBatchBar(state);
+  log(`Batch import of ${refs.length} references into ${target.label}`);
+
+  let imported = 0;
+  let fromMetadata = 0;
+  let failed = 0;
+  let done = 0;
+  for (const ref of refs) {
+    if (batch.cancelled) break;
+    if (live()) setProgress(state, done, refs.length);
+    if (!live() || !state.matches.has(ref.index)) {
+      const method = await importOne(state, ref, target, list);
+      if (!method) failed++;
+      else {
+        imported++;
+        if (method === "metadata") fromMetadata++;
+      }
+    }
+    done++;
+  }
+
+  const parts = [`Imported ${imported} of ${refs.length} into ${target.label}`];
+  if (fromMetadata) parts.push(`${fromMetadata} created from metadata`);
+  if (failed) parts.push(`${failed} failed`);
+  if (batch.cancelled) parts.push(`cancelled after ${done}`);
+  const summary = `${parts.join("; ")}.`;
+  log(summary);
+
+  if (!live()) {
+    // The section now shows another item: report in a progress window.
+    const win = new Zotero.ProgressWindow({ closeOnClick: true });
+    win.changeHeadline(config.addonName);
+    win.addDescription(summary);
+    win.show();
+    win.startCloseTimer(8000);
+    return;
+  }
+  state.batch = undefined;
+  restoreSelection(state);
+  query(state, ".pinakes-progress")!.hidden = true;
+  for (const ref of list.references) updateRow(state, ref);
+  updateBatchBar(state);
+  setStatus(
+    state,
+    failed ? "error" : "info",
+    failed ? `${summary} Failed rows show the reason in red.` : summary,
+  );
+}
+
+/** Test hook: the state of the section showing `itemID`, if any. */
+export function _stateForItem(itemID: number) {
+  return [...states.values()].find((s) => s.item?.id === itemID);
 }

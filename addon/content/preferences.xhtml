@@ -4,6 +4,7 @@
 <vbox id="zotero-prefpane-__addonRef__">
   <groupbox>
     <label><html:h2 data-l10n-id="pref-title"></html:h2></label>
+
     <html:label
       for="zotero-prefpane-__addonRef__-s2key"
       data-l10n-id="pref-s2-key"
@@ -16,6 +17,36 @@
     ></html:input>
     <description data-l10n-id="pref-s2-key-help"></description>
   </groupbox>
+
+  <groupbox>
+    <label><html:h2 data-l10n-id="pref-source-title"></html:h2></label>
+    <hbox align="center">
+      <label data-l10n-id="pref-source"></label>
+      <menulist
+        id="zotero-prefpane-__addonRef__-source"
+        preference="defaultSource"
+      >
+        <menupopup>
+          <menuitem value="semanticscholar" data-l10n-id="pref-source-s2" />
+          <menuitem value="openalex" data-l10n-id="pref-source-openalex" />
+        </menupopup>
+      </menulist>
+    </hbox>
+    <description data-l10n-id="pref-source-help"></description>
+  </groupbox>
+
+  <groupbox>
+    <label><html:h2 data-l10n-id="pref-target-title"></html:h2></label>
+    <radiogroup
+      id="zotero-prefpane-__addonRef__-target"
+      preference="targetMode"
+    >
+      <radio value="selected" data-l10n-id="pref-target-selected" />
+      <radio value="parent" data-l10n-id="pref-target-parent" />
+      <radio value="root" data-l10n-id="pref-target-root" />
+    </radiogroup>
+  </groupbox>
+
   <vbox>
     <html:label
       data-l10n-id="pref-about"

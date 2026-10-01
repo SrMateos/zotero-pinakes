@@ -126,3 +126,13 @@ export function abstractFromInvertedIndex(
   const text = words.filter((w) => w !== undefined).join(" ");
   return text || undefined;
 }
+
+/** Lower-case, accent-free text with punctuation turned into spaces. */
+export function normalizeForSearch(text: string) {
+  return text
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}./]+/gu, " ")
+    .trim();
+}

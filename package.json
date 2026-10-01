@@ -27,7 +27,7 @@
     "lint:fix": "prettier --write . && eslint . --fix",
     "release": "zotero-plugin release",
     "test": "tsc -p test/unit && node --test .scaffold/unit/test/unit/*.test.js",
-    "test:zotero": "zotero-plugin test --exit-on-finish"
+    "test:zotero": "sh test/zotero/run.sh"
   },
   "devDependencies": {
     "@types/chai": "^5.2.3",

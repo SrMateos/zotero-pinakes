@@ -54,8 +54,9 @@ export function sourceLabel(source: SourceName) {
 }
 
 /**
- * Fetch the reference list of a paper. Tries Semantic Scholar first and
- * falls back to OpenAlex when it fails or has no references. Throws a
+ * Fetch the reference list of a paper. Tries the preferred source first
+ * (preference "defaultSource", Semantic Scholar by default) and falls back
+ * to the other one when it fails or has no references. Throws a
  * SourceError describing every failure if no source succeeds.
  */
 export async function fetchReferences(
@@ -67,6 +68,7 @@ export async function fetchReferences(
     ["semanticscholar", () => fetchSemanticScholar(paperId, onStatus)],
     ["openalex", () => fetchOpenAlex(paperId, onStatus)],
   ];
+  if (getPref("defaultSource") === "openalex") attempts.reverse();
   for (const [source, run] of attempts) {
     const label = SOURCE_LABEL[source];
     onStatus(`Fetching references from ${label}…`);
@@ -126,6 +128,8 @@ async function getJSON(
         errorDelayMax: 0,
         noRetryOnThrottle: true,
         timeout: 30_000,
+        // Refresh must really re-fetch; our own cache handles reuse.
+        noCache: true,
         // Not in zotero-types yet, hence the cast.
       } as Parameters<typeof Zotero.HTTP.request>[2]);
     } catch (e) {

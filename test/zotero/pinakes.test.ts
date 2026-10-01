@@ -10,6 +10,7 @@ import { findInLibrary, getPaperId } from "../../src/modules/library";
 import { fetchReferences } from "../../src/modules/sources";
 import type { Reference } from "../../src/modules/types";
 
+const PREF = `${config.prefsPrefix}.targetMode`;
 const ACM_DOI = "10.1145/3292500.3330701"; // Optuna, KDD 2019
 
 async function createGroup(name: string) {
@@ -83,18 +84,40 @@ describe("getPaperId", function () {
 });
 
 describe("resolveTarget", function () {
-  it("uses the selected collection, else the item's library", async function () {
+  it("supports the three target modes", async function () {
     const group = await createGroup("Pinakes target test");
-    const collection = await createCollection(group.libraryID, "Target");
-    await selectCollection(collection);
-    const target = resolveTarget(Zotero.Libraries.userLibraryID);
-    assert.equal(target.libraryID, group.libraryID);
-    assert.equal(target.collectionID, collection.id);
+    const selected = await createCollection(group.libraryID, "Selected");
+    const parent = await createCollection(group.libraryID, "Parent");
+    const citing = new Zotero.Item("journalArticle");
+    citing.libraryID = group.libraryID;
+    citing.setCollections([parent.id]);
+    await citing.saveTx();
+    const personal = new Zotero.Item("journalArticle");
+    await personal.saveTx();
 
+    // "selected": the collection selected in the main window wins, even if
+    // it is in another library than the citing item.
+    await selectCollection(selected);
+    let target = resolveTarget(personal, "selected");
+    assert.equal(target.libraryID, group.libraryID);
+    assert.equal(target.collectionID, selected.id);
+
+    // No collection selected: the citing item's library root.
     await selectLibrary(Zotero.Libraries.userLibraryID);
-    const fallback = resolveTarget(group.libraryID);
-    assert.equal(fallback.libraryID, group.libraryID);
-    assert.isUndefined(fallback.collectionID);
+    target = resolveTarget(citing, "selected");
+    assert.equal(target.libraryID, group.libraryID);
+    assert.isUndefined(target.collectionID);
+
+    target = resolveTarget(citing, "parent");
+    assert.equal(target.collectionID, parent.id);
+    target = resolveTarget(personal, "parent");
+    assert.equal(target.libraryID, Zotero.Libraries.userLibraryID);
+    assert.isUndefined(target.collectionID);
+
+    await selectCollection(selected);
+    target = resolveTarget(citing, "root");
+    assert.equal(target.libraryID, group.libraryID);
+    assert.isUndefined(target.collectionID);
   });
 });
 
@@ -205,44 +228,138 @@ describe("fetchReferences", function () {
 });
 
 describe("item pane section", function () {
-  it("renders reference rows for the selected item", async function () {
+  let collection: Zotero.Collection;
+  let win: _ZoteroTypes.MainWindow;
+
+  before(async function () {
+    // A personal-library collection: selecting items of a group created in
+    // the test profile freezes headless Zotero (independent of the plugin).
+    // Group imports are covered above through the same importReference().
+    collection = await createCollection(
+      Zotero.Libraries.userLibraryID,
+      "Section",
+    );
+    win = Zotero.getMainWindow();
+    Zotero.Prefs.set(PREF, "parent", true);
+  });
+
+  after(function () {
+    Zotero.Prefs.set(PREF, "selected", true);
+  });
+
+  // Failures in this suite may carry non-ASCII text (labels contain "›" and
+  // "…"), which the scaffold reporter cannot transmit; log them as well.
+  afterEach(async function () {
+    const test = this.currentTest;
+    if (test?.state === "failed") {
+      Zotero.debug(`[Pinakes test] ${test.title}: ${test.err?.message}`);
+    }
+  });
+
+  async function waitFor<T>(
+    fn: () => T | undefined | null | false,
+    what: string,
+  ) {
+    for (let i = 0; i < 120; i++) {
+      const value = fn();
+      if (value) return value;
+      await Zotero.Promise.delay(250);
+    }
+    const status = $(".pinakes-status")?.textContent ?? "";
+    // ASCII only: the scaffold reporter hangs on non-ASCII messages.
+    throw new Error(
+      `Timed out waiting for ${what} (status: ${encodeURIComponent(status)})`,
+    );
+  }
+
+  // The main item pane's Pinakes section (the reader context pane has its own).
+  const section = () =>
+    (
+      Array.from(
+        win.document.querySelectorAll("#zotero-item-pane [data-pane]"),
+      ) as Element[]
+    ).find((el) => el.getAttribute("data-pane")?.endsWith("-references"))!;
+  const $ = (sel: string) => section().querySelector(sel) as HTMLElement | null;
+  const rows = () =>
+    Array.from(section().querySelectorAll(".pinakes-row")) as HTMLElement[];
+  const shownRows = () => rows().filter((r) => !r.hidden);
+  const click = (selector: string) => $(selector)!.click();
+
+  it("loads the list without scrolling, filters and batch-imports", async function () {
     const item = new Zotero.Item("journalArticle");
     item.setField("title", "Optuna");
     item.setField("DOI", ACM_DOI);
+    item.setCollections([collection.id]);
     await item.saveTx();
-    const win = Zotero.getMainWindow();
-    await selectLibrary(Zotero.Libraries.userLibraryID);
+    await selectCollection(collection);
     await win.ZoteroPane.selectItem(item.id);
-    // Sections load lazily, when scrolled into view.
-    const details = win.document.querySelector(
-      "#zotero-item-pane item-details",
-    ) as any;
-    const panes = Array.from(
-      win.document.querySelectorAll("#zotero-item-pane [data-pane]"),
-    ) as Element[];
-    const pane = panes.find((el) =>
-      el.getAttribute("data-pane")?.endsWith("-references"),
-    );
-    await details.scrollToPane(pane!.getAttribute("data-pane"), "instant");
 
-    let rows: NodeListOf<Element> | undefined;
-    for (let i = 0; i < 60; i++) {
-      rows = win.document.querySelectorAll(".pinakes-row");
-      if (rows.length) break;
-      await Zotero.Promise.delay(500);
-    }
-    const status = win.document.querySelector(".pinakes-status")?.textContent;
-    assert.isAbove(rows!.length, 10, `rows rendered (status: ${status})`);
-    const first = rows![0];
+    // Eager loading: rows appear although the section was never scrolled to.
+    await waitFor(() => rows().length > 10, "rows");
+    const first = rows()[0];
     assert.isOk(first.querySelector(".pinakes-title")?.textContent);
-    const buttons = Array.from(first.querySelectorAll("button")) as Element[];
-    const labels = buttons.map((b) => b.textContent);
+    const labels = (
+      Array.from(first.querySelectorAll("button")) as Element[]
+    ).map((b) => b.textContent);
     assert.includeMembers(labels, ["Copy DOI", "Open"]);
+    // Keep assertion messages ASCII: the scaffold reporter hangs on others.
+    const label = $(".pinakes-target")?.textContent;
     assert.isTrue(
-      labels.includes("Import") || labels.includes("In library"),
-      `row actions: ${labels.join(", ")}`,
+      label === "Import to: My Library \u203a Section",
+      `target label: ${encodeURIComponent(label ?? "")}`,
     );
-    const target = win.document.querySelector(".pinakes-target")?.textContent;
-    assert.match(target ?? "", /^Import to: /);
+
+    // Filter on the first two titles' distinctive words: only matching rows stay.
+    const titles = rows()
+      .slice(0, 2)
+      .map((r) => r.querySelector(".pinakes-title")!.textContent!);
+    const filter = $(".pinakes-filter") as HTMLInputElement;
+    filter.value = titles[0];
+    filter.dispatchEvent(new win.Event("input"));
+    assert.isAtLeast(shownRows().length, 1);
+    assert.isBelow(shownRows().length, rows().length);
+    assert.match($(".pinakes-count")?.textContent ?? "", / of /);
+
+    // Import all shown, then clear the filter.
+    const before = collection.getChildItems().length;
+    click(".pinakes-import-all");
+    await waitFor(
+      () =>
+        $(".pinakes-progress")?.hidden &&
+        /Imported/.test($(".pinakes-status")?.textContent ?? ""),
+      "batch to finish",
+    );
+    assert.isTrue(
+      /Imported \d+ of \d+/.test($(".pinakes-status")!.textContent!),
+    );
+    assert.isAbove(collection.getChildItems().length, before);
+    for (const child of collection.getChildItems()) {
+      assert.equal(child.libraryID, Zotero.Libraries.userLibraryID);
+    }
+    assert.isOk(shownRows()[0].querySelector(".pinakes-in-library"));
+
+    filter.value = "";
+    filter.dispatchEvent(new win.Event("input"));
+    assert.equal(shownRows().length, rows().length);
+
+    // Multi-select with shift-click, then "Import selected".
+    const candidates = rows().filter((r) => r.querySelector(".pinakes-import"));
+    const a = candidates[0].querySelector(".pinakes-check") as HTMLInputElement;
+    const b = candidates[1].querySelector(".pinakes-check") as HTMLInputElement;
+    a.click();
+    b.dispatchEvent(
+      new win.MouseEvent("click", { shiftKey: true, bubbles: true }),
+    );
+    const button = $(".pinakes-import-selected")!;
+    assert.match(button.textContent!, /Import selected \(\d+\)/);
+    assert.notEqual(button.textContent, "Import selected (0)");
+    const count = collection.getChildItems().length;
+    (button as HTMLElement).click();
+    await waitFor(
+      () =>
+        $(".pinakes-progress")?.hidden &&
+        collection.getChildItems().length > count,
+      "selected import",
+    );
   });
 });

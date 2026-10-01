@@ -127,3 +127,47 @@
   color: var(--accent-red, #d10000);
   overflow-wrap: anywhere;
 }
+
+.pinakes-filterbar,
+.pinakes-batchbar,
+.pinakes-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+
+.pinakes-filterbar[hidden],
+.pinakes-batchbar[hidden],
+.pinakes-progress[hidden] {
+  display: none;
+}
+
+.pinakes-filter {
+  flex: 1 1 10em;
+  min-width: 0;
+}
+
+.pinakes-count,
+.pinakes-progress-text {
+  font-size: 0.92em;
+  color: var(--fill-secondary, #666);
+}
+
+.pinakes-progress-bar {
+  flex: 1 1 6em;
+}
+
+.pinakes-row[hidden] {
+  display: none;
+}
+
+.pinakes-check {
+  flex: 0 0 auto;
+  margin: 2px 0 0;
+}
+
+.pinakes-abstract,
+.pinakes-actions {
+  margin-inline-start: calc(2ch + 26px);
+}
