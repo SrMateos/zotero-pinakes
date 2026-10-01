@@ -47,6 +47,7 @@ export class SourceError extends Error {
 const SOURCE_LABEL: Record<SourceName, string> = {
   semanticscholar: "Semantic Scholar",
   openalex: "OpenAlex",
+  pdf: "the PDF (Crossref)",
 };
 
 export function sourceLabel(source: SourceName) {
@@ -96,8 +97,8 @@ export async function fetchReferences(
   throw new SourceError(notes.join("\n"));
 }
 
-export function describe(paperId: PaperId) {
-  return `${paperId.kind}:${paperId.value}`;
+export function describe(paperId: PaperId | undefined) {
+  return paperId ? `${paperId.kind}:${paperId.value}` : "(no identifier)";
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +110,7 @@ export function describe(paperId: PaperId) {
  * exponential backoff (honouring Retry-After), reporting each wait through
  * onStatus. Returns null on 404.
  */
-async function getJSON(
+export async function getJSON(
   url: string,
   label: string,
   onStatus: StatusCallback,

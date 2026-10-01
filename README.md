@@ -57,6 +57,31 @@ the works a paper cites.
   you switch to another item mid-batch, the batch keeps going and reports in
   a Zotero progress window.
 
+### PDF fallback
+
+When neither API has references for a paper, or the item has no DOI or
+arXiv ID, Pinakes can read the bibliography from the PDF:
+
+1. The PDF's text is extracted locally by Zotero (`Zotero.PDFWorker`).
+2. The bibliography is the text after the last "References" or
+   "Bibliography" heading, up to an appendix. Page numbers and running
+   headers are dropped, and entries split across pages are re-joined.
+   Bracketed (`[12]`), numbered (`12.`) and author-year styles are
+   recognised.
+3. Each entry is looked up in Crossref's bibliographic search. A match is
+   accepted only if the title Crossref returns appears in the entry text.
+   Requests go one at a time, at least 0.6 s apart.
+4. Matched entries become normal rows, numbered as in the paper. Entries
+   that Crossref does not match but that contain a DOI or arXiv ID can
+   still be imported. All other entries are shown as plain text with a
+   **Copy** button.
+
+In the PDF reader this runs automatically. In the library view the section
+shows a **Read the bibliography from the PDF** button instead, because it
+sends one Crossref request per entry. It can be turned off in Settings →
+Pinakes. The result is cached like any other list; press **Refresh** to try
+the APIs again.
+
 ### Where imports go
 
 By default the target is the **collection currently selected in the main
@@ -80,13 +105,15 @@ Read-only libraries are refused with an error message.
 
 ## Network requests
 
-The plugin itself contacts only these two hosts:
+The plugin itself contacts only these hosts:
 
 | When                         | Request                                                                                                                                                                                                                                                              |
 | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Loading references (primary) | `GET https://api.semanticscholar.org/graph/v1/paper/{DOI:<doi> \| ARXIV:<id>}/references?fields=title,authors,year,venue,externalIds,abstract,publicationTypes&offset=<n>&limit=500`. If you set an API key, it is sent in the `x-api-key` header to this host only. |
 | Fallback                     | `GET https://api.openalex.org/works/doi:<doi>?select=id,referenced_works`. arXiv papers are looked up by their DataCite DOI, `10.48550/arxiv.<id>`.                                                                                                                  |
 | Fallback, details            | `GET https://api.openalex.org/works?filter=ids.openalex:W1\|W2…&per-page=50&select=id,doi,display_name,publication_year,authorships,primary_location,locations,type,abstract_inverted_index` (one request per 50 references)                                         |
+
+| PDF fallback only | `GET https://api.crossref.org/works?query.bibliographic=<entry text, max. 400 chars>&rows=3&select=DOI,title,author,issued,container-title,type,abstract` (one per bibliography entry, sequential) |
 
 `publicationTypes` is requested in addition to the fields you specified. It
 is used only to choose the item type when an item has to be created from
@@ -148,6 +175,9 @@ Source layout:
   index (one SQL query per library)
 - `src/modules/importer.ts`: import target and translation, plus creation
   from metadata
+- `src/modules/bibliography.ts`: pure bibliography extraction from PDF text
+  (unit-tested)
+- `src/modules/pdf.ts`: the PDF fallback (PDF text, then Crossref)
 - `src/modules/cache.ts`: memory and JSON-file cache
 - `src/modules/section.ts`: the item pane section UI
 

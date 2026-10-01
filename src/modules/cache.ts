@@ -27,7 +27,8 @@ function cachePath(item: Zotero.Item) {
   return PathUtils.join(cacheDir(), `${cacheKey(item)}.json`);
 }
 
-function samePaper(a: PaperId, b: PaperId) {
+function samePaper(a: PaperId | undefined, b: PaperId | undefined) {
+  if (!a || !b) return a === b;
   return a.kind === b.kind && a.value === b.value;
 }
 
@@ -37,7 +38,7 @@ function samePaper(a: PaperId, b: PaperId) {
  */
 export async function getCached(
   item: Zotero.Item,
-  paperId: PaperId,
+  paperId: PaperId | undefined,
 ): Promise<ReferenceList | undefined> {
   const key = cacheKey(item);
   let list = memory.get(key);

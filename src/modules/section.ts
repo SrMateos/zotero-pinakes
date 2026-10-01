@@ -16,6 +16,7 @@ import {
   type TargetMode,
 } from "./importer";
 import { findInLibrary, getPaperId } from "./library";
+import { referencesFromPdf } from "./pdf";
 import { describe, fetchReferences, sourceLabel } from "./sources";
 import type { PaperId, Reference, ReferenceList } from "./types";
 
@@ -185,6 +186,11 @@ function citingItem(item: Zotero.Item | undefined | null) {
   return item.isRegularItem() ? item : undefined;
 }
 
+/** Can this reference be imported (resolved, and not in the library)? */
+function importable(state: SectionState, ref: Reference) {
+  return !ref.unresolved && !state.matches.has(ref.index);
+}
+
 function currentTarget(state: SectionState) {
   return resolveTarget(state.item!, getPref("targetMode") as TargetMode);
 }
@@ -193,13 +199,21 @@ function currentTarget(state: SectionState) {
 // Loading
 // ---------------------------------------------------------------------------
 
-async function load(state: SectionState, force: boolean) {
+/**
+ * Load and show the list. `allowPdf` enables the PDF fallback; it is
+ * automatic in the reader, and on request (a button) in the library view.
+ */
+async function load(
+  state: SectionState,
+  force: boolean,
+  allowPdf = state.tabType === "reader",
+) {
   const token = ++state.token;
   const item = state.item;
   if (!item) return;
   state.loading = true;
   try {
-    const list = await loadList(state, item, force, token);
+    const list = await loadList(state, item, force, token, allowPdf);
     if (!list || state.token !== token) return;
     state.list = list;
     renderList(state);
@@ -214,18 +228,10 @@ async function loadList(
   item: Zotero.Item,
   force: boolean,
   token: number,
+  allowPdf: boolean,
 ): Promise<ReferenceList | undefined> {
   const paperId = getPaperId(item);
   state.paperId = paperId;
-  if (!paperId) {
-    setStatus(
-      state,
-      "info",
-      "No identifier: this item has no DOI and no arXiv ID (checked the DOI, URL, Extra and Archive ID fields). Add one to see its references.",
-    );
-    state.setSummary?.("No identifier");
-    return undefined;
-  }
 
   const cached = force ? undefined : await getCached(item, paperId);
   if (cached) {
@@ -233,16 +239,56 @@ async function loadList(
     return cached;
   }
 
+  const pdfEnabled = getPref("pdfFallback") !== false;
+  if (!paperId && !(pdfEnabled && allowPdf)) {
+    setStatus(state, "info", NO_IDENTIFIER);
+    if (pdfEnabled) offerPdf(state);
+    state.setSummary?.("No identifier");
+    return undefined;
+  }
+
   if (state.tabType !== "reader") {
     await Zotero.Promise.delay(LIBRARY_FETCH_DELAY_MS);
     if (state.token !== token) return undefined;
   }
+  const onStatus = (message: string) => {
+    if (state.token === token) setStatus(state, "busy", message);
+  };
 
-  setStatus(state, "busy", `Fetching references for ${describe(paperId)}…`);
+  const notes: string[] = [];
+  if (paperId) {
+    onStatus(`Fetching references for ${describe(paperId)}…`);
+    try {
+      const list = await fetchReferences(paperId, onStatus);
+      await setCached(item, list);
+      return list;
+    } catch (e) {
+      if (state.token !== token) return undefined;
+      const message = e instanceof Error ? e.message : String(e);
+      if (!(pdfEnabled && allowPdf)) {
+        setStatus(
+          state,
+          "error",
+          `Could not load references for ${describe(paperId)}.\n${message}`,
+        );
+        if (pdfEnabled) offerPdf(state);
+        state.setSummary?.("Error");
+        return undefined;
+      }
+      notes.push(...message.split("\n"));
+    }
+  } else {
+    notes.push("This item has no DOI or arXiv ID.");
+  }
+
   try {
-    const list = await fetchReferences(paperId, (message) => {
-      if (state.token === token) setStatus(state, "busy", message);
-    });
+    const list = await referencesFromPdf(
+      item,
+      paperId,
+      notes,
+      onStatus,
+      () => state.token !== token,
+    );
     await setCached(item, list);
     return list;
   } catch (e) {
@@ -251,11 +297,30 @@ async function loadList(
     setStatus(
       state,
       "error",
-      `Could not load references for ${describe(paperId)}.\n${message}`,
+      `${notes.join("\n")}\nReading the PDF bibliography failed: ${message}`,
     );
-    state.setSummary?.("Error");
+    state.setSummary?.(paperId ? "Error" : "No identifier");
     return undefined;
   }
+}
+
+const NO_IDENTIFIER =
+  "No identifier: this item has no DOI and no arXiv ID (checked the DOI, URL, Extra and Archive ID fields). Add one to see its references.";
+
+/**
+ * In the library view the PDF fallback is not automatic (it reads the PDF
+ * and sends one Crossref request per entry); offer it as a button.
+ */
+function offerPdf(state: SectionState) {
+  const status = query(state, ".pinakes-status");
+  if (!status || !state.item) return;
+  status.append(
+    state.doc.createElementNS(HTML_NS, "br"),
+    button(state.doc, "Read the bibliography from the PDF", () => {
+      setStatus(state, "busy", "Reading the bibliography from the PDF…");
+      void load(state, true, true);
+    }),
+  );
 }
 
 /** Update the import target and the "In library" marks. */
@@ -369,7 +434,7 @@ function renderSkeleton(state: SectionState) {
   selectAll.title = "Select all shown references that are not in the library";
   selectAll.addEventListener("change", () => {
     for (const ref of shownRefs(state)) {
-      if (state.matches.has(ref.index)) continue;
+      if (!importable(state, ref)) continue;
       if (selectAll.checked) state.selected.add(ref.index);
       else state.selected.delete(ref.index);
       updateRow(state, ref);
@@ -378,13 +443,13 @@ function renderSkeleton(state: SectionState) {
   });
   const importSelected = button(doc, "Import selected", () => {
     const refs = shownRefs(state).filter(
-      (r) => state.selected.has(r.index) && !state.matches.has(r.index),
+      (r) => state.selected.has(r.index) && importable(state, r),
     );
     void runBatch(state, refs);
   });
   importSelected.classList.add("pinakes-import-selected");
   const importAll = button(doc, "Import all not in library", () => {
-    const refs = shownRefs(state).filter((r) => !state.matches.has(r.index));
+    const refs = shownRefs(state).filter((r) => importable(state, r));
     void runBatch(state, refs);
   });
   importAll.classList.add("pinakes-import-all");
@@ -481,6 +546,7 @@ function haystack(ref: Reference) {
         ref.year,
         ref.doi,
         ref.arxiv,
+        ref.raw,
       ]
         .filter(Boolean)
         .join(" "),
@@ -537,29 +603,44 @@ function renderRow(state: SectionState, ref: Reference) {
   const { doc } = state;
   const li = h(doc, "li", "pinakes-row");
   li.dataset.index = String(ref.index);
+  if (ref.unresolved) li.classList.add("pinakes-unresolved");
 
   const check = h(doc, "input", "pinakes-check");
   check.type = "checkbox";
   check.addEventListener("click", (e) => onCheck(state, ref, e as MouseEvent));
 
   const main = h(doc, "div", "pinakes-row-main");
-  main.title = ref.abstract
-    ? ref.abstract.length > 600
-      ? `${ref.abstract.slice(0, 600)}…`
-      : ref.abstract
-    : "No abstract available. Click to expand.";
+  main.title = ref.unresolved
+    ? "Crossref found no match for this entry from the PDF."
+    : ref.abstract
+      ? ref.abstract.length > 600
+        ? `${ref.abstract.slice(0, 600)}…`
+        : ref.abstract
+      : "No abstract available. Click to expand.";
   const text = h(doc, "div", "pinakes-text");
-  text.append(h(doc, "div", "pinakes-title", ref.title));
-  const meta = [authorYear(ref), ref.venue].filter(Boolean).join(" · ");
-  text.append(h(doc, "div", "pinakes-meta", meta));
-  main.append(check, h(doc, "span", "pinakes-num", `${ref.index}`), text);
+  if (ref.unresolved) {
+    text.append(
+      h(doc, "div", "pinakes-raw", ref.raw ?? ref.title),
+      h(doc, "div", "pinakes-meta", "From the PDF, not found in Crossref"),
+    );
+  } else {
+    text.append(h(doc, "div", "pinakes-title", ref.title));
+    const meta = [authorYear(ref), ref.venue].filter(Boolean).join(" · ");
+    text.append(h(doc, "div", "pinakes-meta", meta));
+  }
+  // Lists read from the PDF keep the paper's own numbering.
+  const number = ref.label ?? String(ref.index);
+  main.append(check, h(doc, "span", "pinakes-num", number), text);
   main.addEventListener("click", () => li.classList.toggle("pinakes-expanded"));
 
   const abstract = h(
     doc,
     "div",
     "pinakes-abstract",
-    ref.abstract ?? "No abstract available.",
+    ref.unresolved
+      ? ""
+      : (ref.abstract ?? "No abstract available.") +
+          (ref.raw ? `\n\nAs printed in the PDF: ${ref.raw}` : ""),
   );
   const actions = h(doc, "div", "pinakes-actions");
   li.append(main, abstract, actions);
@@ -573,10 +654,10 @@ function updateCheck(
   ref: Reference,
   check: HTMLInputElement,
 ) {
-  const inLibrary = state.matches.has(ref.index);
-  check.disabled = inLibrary || !!state.batch;
-  check.checked = !inLibrary && state.selected.has(ref.index);
-  check.style.visibility = inLibrary ? "hidden" : "";
+  const can = importable(state, ref);
+  check.disabled = !can || !!state.batch;
+  check.checked = can && state.selected.has(ref.index);
+  check.style.visibility = can ? "" : "hidden";
 }
 
 function onCheck(state: SectionState, ref: Reference, event: MouseEvent) {
@@ -593,8 +674,9 @@ function onCheck(state: SectionState, ref: Reference, event: MouseEvent) {
     }
   }
   state.lastClicked = ref.index;
+  const byIndex = new Map(state.list!.references.map((r) => [r.index, r]));
   for (const index of indexes) {
-    if (state.matches.has(index)) continue;
+    if (!importable(state, byIndex.get(index)!)) continue;
     if (checked) state.selected.add(index);
     else state.selected.delete(index);
   }
@@ -620,6 +702,16 @@ function fillActions(
 ) {
   const { doc } = state;
   actions.replaceChildren();
+  if (ref.unresolved) {
+    const copy = button(doc, "Copy", () => {
+      Zotero.Utilities.Internal.copyTextToClipboard(ref.raw ?? ref.title);
+      copy.textContent = "Copied";
+      setTimeout(() => (copy.textContent = "Copy"), 1500);
+    });
+    copy.title = "Copy the entry text, e.g. to search for it.";
+    actions.append(copy);
+    return;
+  }
   const itemID = state.matches.get(ref.index);
 
   if (itemID) {
@@ -741,7 +833,7 @@ async function importOne(
 
 function updateBatchBar(state: SectionState) {
   const shown = shownRefs(state);
-  const notInLibrary = shown.filter((r) => !state.matches.has(r.index));
+  const notInLibrary = shown.filter((r) => importable(state, r));
   const selected = notInLibrary.filter((r) => state.selected.has(r.index));
   const busy = !!state.batch;
 

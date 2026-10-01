@@ -10,6 +10,7 @@ declare namespace _ZoteroTypes {
       "s2ApiKey": string;
       "defaultSource": string;
       "targetMode": string;
+      "pdfFallback": boolean;
     };
   }
 }

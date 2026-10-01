@@ -7,6 +7,7 @@ import { assert } from "chai";
 import { config } from "../../package.json";
 import { importReference, resolveTarget } from "../../src/modules/importer";
 import { findInLibrary, getPaperId } from "../../src/modules/library";
+import { referencesFromPdf } from "../../src/modules/pdf";
 import { fetchReferences } from "../../src/modules/sources";
 import type { Reference } from "../../src/modules/types";
 
@@ -361,5 +362,85 @@ describe("item pane section", function () {
         collection.getChildItems().length > count,
       "selected import",
     );
+  });
+});
+
+describe("PDF fallback", function () {
+  let item: Zotero.Item;
+
+  before(async function () {
+    this.timeout(120_000);
+    // Optuna's arXiv PDF: 29 bracketed references.
+    const xhr = await Zotero.HTTP.request(
+      "GET",
+      "https://arxiv.org/pdf/1907.10902v1",
+      { responseType: "arraybuffer" },
+    );
+    const path = PathUtils.join(PathUtils.tempDir, "pinakes-test-optuna.pdf");
+    await IOUtils.write(path, new Uint8Array(xhr.response as ArrayBuffer));
+    item = new Zotero.Item("journalArticle");
+    item.setField("title", "A paper whose identifier is unknown");
+    await item.saveTx();
+    await Zotero.Attachments.importFromFile({
+      file: path,
+      parentItemID: item.id,
+    });
+  });
+
+  it("extracts and resolves the bibliography", async function () {
+    this.timeout(300_000);
+    const notes: string[] = [];
+    const list = await referencesFromPdf(
+      item,
+      undefined,
+      notes,
+      () => {},
+      () => false,
+    );
+    assert.equal(list.source, "pdf");
+    assert.isAtLeast(list.references.length, 25);
+    assert.equal(list.references[0].label, "1");
+    assert.match(list.references[0].raw!, /Hyperopt/);
+    const resolved = list.references.filter((r) => r.doi && !r.unresolved);
+    assert.isAtLeast(resolved.length, 5, "some entries resolved via Crossref");
+    assert.isTrue(
+      /Extracted \d+ references from the PDF/.test(notes.join(" ")),
+    );
+  });
+
+  it("offers the PDF in the library view and lists the entries", async function () {
+    this.timeout(300_000);
+    const win = Zotero.getMainWindow();
+    await (win.ZoteroPane as any).collectionsView.selectLibrary(
+      Zotero.Libraries.userLibraryID,
+    );
+    await win.ZoteroPane.selectItem(item.id);
+    const section = () =>
+      (
+        Array.from(
+          win.document.querySelectorAll("#zotero-item-pane [data-pane]"),
+        ) as Element[]
+      ).find((el) => el.getAttribute("data-pane")?.endsWith("-references"))!;
+    const find = (sel: string) =>
+      section().querySelector(sel) as HTMLElement | null;
+    const waitFor = async (fn: () => unknown, what: string, tries = 1000) => {
+      for (let i = 0; i < tries; i++) {
+        if (fn()) return;
+        await Zotero.Promise.delay(250);
+      }
+      throw new Error(`Timed out waiting for ${what}`);
+    };
+    await waitFor(
+      () => find(".pinakes-status button"),
+      "the read-from-PDF button",
+      40,
+    );
+    find(".pinakes-status button")!.click();
+    await waitFor(
+      () => section().querySelectorAll(".pinakes-row").length > 20,
+      "rows",
+    );
+    assert.equal(find(".pinakes-num")!.textContent, "1");
+    assert.isTrue(/from the PDF/.test(find(".pinakes-source")!.textContent!));
   });
 });

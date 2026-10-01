@@ -10,5 +10,5 @@
     "rootDir": "../..",
     "outDir": "../../.scaffold/unit"
   },
-  "files": ["identifiers.test.ts"]
+  "files": ["identifiers.test.ts", "bibliography.test.ts"]
 }

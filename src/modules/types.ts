@@ -1,5 +1,5 @@
 /** Where a reference list came from. */
-export type SourceName = "semanticscholar" | "openalex";
+export type SourceName = "semanticscholar" | "openalex" | "pdf";
 
 /** Identifier of the citing paper, used to query the APIs. */
 export type PaperId =
@@ -20,11 +20,18 @@ export interface Reference {
   arxiv?: string;
   abstract?: string;
   kind: RefKind;
+  /** PDF fallback: the entry text as printed in the bibliography. */
+  raw?: string;
+  /** PDF fallback: the label printed in the paper ("23" for "[23]"). */
+  label?: string;
+  /** PDF fallback: Crossref found no match; only `raw` is meaningful. */
+  unresolved?: boolean;
 }
 
 /** A fetched reference list, as stored in the cache. */
 export interface ReferenceList {
-  paperId: PaperId;
+  /** Undefined for lists extracted from the PDF of an item without ID. */
+  paperId?: PaperId;
   source: SourceName;
   fetchedAt: string;
   references: Reference[];

@@ -171,3 +171,12 @@
 .pinakes-actions {
   margin-inline-start: calc(2ch + 26px);
 }
+
+.pinakes-raw {
+  overflow-wrap: anywhere;
+  font-size: 0.95em;
+}
+
+.pinakes-unresolved .pinakes-row-main {
+  cursor: default;
+}

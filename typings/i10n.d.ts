@@ -4,6 +4,8 @@
 // @ts-nocheck
 export type FluentMessageId =
   | 'pref-about'
+  | 'pref-pdf-fallback'
+  | 'pref-pdf-fallback-help'
   | 'pref-s2-key'
   | 'pref-s2-key-help'
   | 'pref-source'
