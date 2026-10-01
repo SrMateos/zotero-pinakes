@@ -1,5 +1,10 @@
 import { config } from "../package.json";
 import { log } from "./utils/log";
+import {
+  attachReaderByTabID,
+  registerCitationPopups,
+  unregisterCitationPopups,
+} from "./modules/citationPopups";
 import { invalidateLibraryIndex } from "./modules/library";
 import {
   refreshLibraryMarks,
@@ -12,6 +17,7 @@ const STYLESHEET_ID = `${config.addonRef}-stylesheet`;
 const MAIN_FTL = `${config.addonRef}-mainWindow.ftl`;
 
 let notifierID: string | undefined;
+let tabNotifierID: string | undefined;
 let marksTimer: ReturnType<typeof setTimeout> | undefined;
 
 async function onStartup() {
@@ -47,6 +53,20 @@ async function onStartup() {
     config.addonRef,
   );
 
+  // Experimental citation popups in the PDF reader (off by default).
+  registerCitationPopups();
+  tabNotifierID = Zotero.Notifier.registerObserver(
+    {
+      notify: async (event: string, _type: string, ids: unknown[]) => {
+        if (event === "select" || event === "add") {
+          for (const id of ids) attachReaderByTabID(String(id));
+        }
+      },
+    },
+    ["tab"],
+    `${config.addonRef}-tabs`,
+  );
+
   await Promise.all(
     Zotero.getMainWindows().map((win) => onMainWindowLoad(win)),
   );
@@ -73,6 +93,8 @@ async function onMainWindowUnload(win: Window): Promise<void> {
 function onShutdown(): void {
   log("Shutting down");
   if (notifierID) Zotero.Notifier.unregisterObserver(notifierID);
+  if (tabNotifierID) Zotero.Notifier.unregisterObserver(tabNotifierID);
+  unregisterCitationPopups();
   if (marksTimer) clearTimeout(marksTimer);
   unregisterSection();
   for (const win of Zotero.getMainWindows()) void onMainWindowUnload(win);

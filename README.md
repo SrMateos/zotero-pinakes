@@ -82,6 +82,28 @@ sends one Crossref request per entry. It can be turned off in Settings →
 Pinakes. The result is cached like any other list; press **Refresh** to try
 the APIs again.
 
+### Citation popups in the reader (experimental)
+
+Turn this on in Settings → Pinakes → Experimental. In the PDF reader,
+pausing the mouse over a numeric citation marker such as `[23]` or
+`[4, 7–9]` then shows a card for each cited reference: title, authors,
+year, venue, the start of the abstract, and **Open** and **Import** (or "In
+library") buttons.
+
+- The marker is read from the reader's text layer under the pointer.
+  Markers split across lines are handled.
+- Numbers are matched to the paper's own bibliography, which is read
+  locally from the PDF. Each entry is then matched by title to the API
+  reference, because the order of API results does not always follow the
+  paper's numbering. If the PDF uses author-year citations or its
+  bibliography cannot be read, the API order is used and the popup says so.
+- Popups appear only once the Pinakes section has loaded the reference
+  list for that paper.
+- Recent Zotero versions show their own popup for citations they detect.
+  When both appear, Zotero's popup shows the bibliography text and the
+  Pinakes popup adds the metadata and import buttons. This is why the
+  feature is off by default.
+
 ### Where imports go
 
 By default the target is the **collection currently selected in the main
@@ -144,6 +166,8 @@ release build is not minified, so `content/scripts/pinakes.js` inside the
 - **Where imported references go**: the selected collection (default), the
   collection that contains the paper being read, or always the library
   root.
+- **PDF fallback**: on by default.
+- **Experimental → citation popups**: off by default.
 
 ## Debugging
 
@@ -178,6 +202,9 @@ Source layout:
 - `src/modules/bibliography.ts`: pure bibliography extraction from PDF text
   (unit-tested)
 - `src/modules/pdf.ts`: the PDF fallback (PDF text, then Crossref)
+- `src/modules/citations.ts`: pure parser for citation markers such as
+  `[4, 7–9]` (unit-tested)
+- `src/modules/citationPopups.ts`: the reader popups
 - `src/modules/cache.ts`: memory and JSON-file cache
 - `src/modules/section.ts`: the item pane section UI
 

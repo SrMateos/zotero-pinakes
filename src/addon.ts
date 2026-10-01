@@ -1,5 +1,6 @@
 import { config } from "../package.json";
 import hooks from "./hooks";
+import { hoverForTest } from "./modules/citationPopups";
 
 class Addon {
   public data: {
@@ -9,6 +10,8 @@ class Addon {
     initialized: boolean;
   };
   public hooks: typeof hooks;
+  /** Only used by the integration tests. */
+  public testHooks = { hoverForTest };
 
   constructor() {
     this.data = {

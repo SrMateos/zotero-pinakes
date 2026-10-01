@@ -11,6 +11,7 @@ declare namespace _ZoteroTypes {
       "defaultSource": string;
       "targetMode": string;
       "pdfFallback": boolean;
+      "citationPopups": boolean;
     };
   }
 }

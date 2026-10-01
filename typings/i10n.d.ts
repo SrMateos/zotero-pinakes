@@ -4,6 +4,9 @@
 // @ts-nocheck
 export type FluentMessageId =
   | 'pref-about'
+  | 'pref-citation-popups'
+  | 'pref-citation-popups-help'
+  | 'pref-experimental-title'
   | 'pref-pdf-fallback'
   | 'pref-pdf-fallback-help'
   | 'pref-s2-key'

@@ -443,4 +443,68 @@ describe("PDF fallback", function () {
     assert.equal(find(".pinakes-num")!.textContent, "1");
     assert.isTrue(/from the PDF/.test(find(".pinakes-source")!.textContent!));
   });
+
+  it("shows a reference card when hovering a citation marker in the reader", async function () {
+    this.timeout(180_000);
+    const pref = `${config.prefsPrefix}.citationPopups`;
+    Zotero.Prefs.set(pref, true, true);
+    try {
+      const attachmentID = item.getAttachments()[0];
+      const reader: any = await (Zotero as any).Reader.open(attachmentID);
+      await reader._initPromise;
+
+      // PDF.js re-renders text layers while loading, so look the marker up
+      // again on every attempt rather than keeping a reference to it.
+      const findMarker = () => {
+        const doc: Document | undefined =
+          reader._internalReader?._primaryView?._iframeWindow?.document;
+        const span = (
+          Array.from(
+            doc?.querySelectorAll(".textLayer span") ?? [],
+          ) as Element[]
+        ).find((s) => /\[\d{1,2}\]/.test(s.firstChild?.textContent ?? ""));
+        if (!doc || !span) return undefined;
+        // Hit-testing only works inside the visible viewport.
+        const viewport = doc.defaultView!.innerHeight;
+        const box = span.getBoundingClientRect();
+        if (box.top < 0 || box.bottom > viewport) {
+          span.scrollIntoView({ block: "center" });
+          return undefined;
+        }
+        const textNode = span.firstChild!;
+        const at = (textNode.textContent ?? "").search(/\[\d/) + 1;
+        const range = doc.createRange();
+        range.setStart(textNode, at);
+        range.setEnd(textNode, at + 1);
+        const label = (textNode.textContent ?? "").slice(at).match(/^\d+/)![0];
+        return { doc, rect: range.getBoundingClientRect(), label };
+      };
+
+      // Real mouse events cannot be delivered to the reader's view in the
+      // headless test profile, so run the plugin's hover handler directly
+      // at the marker's position.
+      const plugin = (Zotero as any)[config.addonInstance];
+      let popup: Element | null = null;
+      let label = "";
+      for (let i = 0; i < 120 && !popup; i++) {
+        await Zotero.Promise.delay(500);
+        const marker = findMarker();
+        if (!marker) continue;
+        label = marker.label;
+        await plugin.testHooks.hoverForTest(
+          reader.tabID,
+          marker.rect.left + marker.rect.width / 2,
+          marker.rect.top + marker.rect.height / 2,
+        );
+        popup = marker.doc.querySelector(".pinakes-citation-popup");
+      }
+      assert.isOk(popup, "popup shown");
+      assert.isTrue(
+        popup!.textContent!.includes(`[${label}]`),
+        `popup for [${label}]`,
+      );
+    } finally {
+      Zotero.Prefs.set(pref, false, true);
+    }
+  });
 });
