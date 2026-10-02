@@ -7,7 +7,7 @@ import { assert } from "chai";
 import { config } from "../../package.json";
 import { importReference, resolveTarget } from "../../src/modules/importer";
 import { findInLibrary, getPaperId } from "../../src/modules/library";
-import { referencesFromPdf } from "../../src/modules/pdf";
+import { applyPaperOrder, referencesFromPdf } from "../../src/modules/pdf";
 import { fetchReferences } from "../../src/modules/sources";
 import type { Reference } from "../../src/modules/types";
 
@@ -405,6 +405,23 @@ describe("PDF fallback", function () {
     assert.isAtLeast(resolved.length, 5, "some entries resolved via Crossref");
     assert.isTrue(
       /Extracted \d+ references from the PDF/.test(notes.join(" ")),
+    );
+  });
+
+  it("puts an API list in the paper's order", async function () {
+    this.timeout(120_000);
+    const fetched = await fetchReferences(
+      { kind: "DOI", value: ACM_DOI },
+      () => {},
+    );
+    const list = await applyPaperOrder(item, fetched);
+    assert.equal(list.order, "paper");
+    assert.equal(list.references[0].label, "1");
+    assert.match(list.references[0].title, /hyperopt/i);
+    assert.match(list.references[1].title, /bayesian optimization/i);
+    assert.deepEqual(
+      list.references.slice(0, 5).map((r) => r.index),
+      [1, 2, 3, 4, 5],
     );
   });
 

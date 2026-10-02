@@ -26,7 +26,7 @@
     "lint:check": "prettier --check . && eslint .",
     "lint:fix": "prettier --write . && eslint . --fix",
     "release": "zotero-plugin release",
-    "test": "tsc -p test/unit && node --test .scaffold/unit/test/unit/*.test.js",
+    "test": "tsc -p test/unit && node -e \"require('fs').writeFileSync('.scaffold/unit/package.json', '{\\\"type\\\":\\\"commonjs\\\"}')\" && node --test .scaffold/unit/test/unit/*.test.js",
     "test:zotero": "sh test/zotero/run.sh"
   },
   "devDependencies": {

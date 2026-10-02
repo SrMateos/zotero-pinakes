@@ -6,7 +6,8 @@ import { log } from "../utils/log";
 import { describe } from "./sources";
 import type { PaperId, ReferenceList } from "./types";
 
-const CACHE_VERSION = 1;
+// 2: lists are stored in the paper's order (see ordering.ts).
+const CACHE_VERSION = 2;
 
 interface CacheFile {
   version: number;

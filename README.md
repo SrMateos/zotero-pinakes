@@ -27,6 +27,19 @@ the works a paper cites.
   nothing, it falls back to **OpenAlex**. Rate limits (HTTP 429) and server
   errors are retried with exponential backoff. Every retry, fallback and
   error is shown in the section.
+- **References are listed in the order of the paper's bibliography, with
+  the paper's own numbers.** The APIs do not return references in that
+  order: Semantic Scholar's first result for "Attention Is All You Need" is
+  the paper's reference [28]. So when the item has a PDF, Pinakes reads its
+  bibliography locally (no network) and matches every entry to the API
+  references by title, or else by the DOI or arXiv ID in the entry.
+  - Entries the API does not have are still listed, built from the PDF
+    text: importable if they contain a DOI or arXiv ID, otherwise plain
+    text with Copy.
+  - API references found in no entry go at the end, without a number.
+  - With no PDF, a bibliography that cannot be read, or too few matches,
+    the API order is kept and the section says so.
+  - The header shows "…, paper order" when the list follows the paper.
 - Each row shows the number, title, first author and year, and venue. Hover
   over a row to see the abstract as a tooltip, or click it to expand the
   abstract inline. Each row has three actions:

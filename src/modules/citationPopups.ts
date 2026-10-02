@@ -152,7 +152,8 @@ async function buildMapping(
   const cards = new Map<number, Card>();
   const base = { fetchedAt: list.fetchedAt, source: list.source, cards };
 
-  if (list.source === "pdf") {
+  // Lists in the paper's order already carry the paper's numbers.
+  if (list.order === "paper" && list.references.some((r) => r.label)) {
     for (const ref of list.references) {
       if (!ref.label) continue;
       cards.set(Number(ref.label), {

@@ -33,6 +33,11 @@ export interface ReferenceList {
   /** Undefined for lists extracted from the PDF of an item without ID. */
   paperId?: PaperId;
   source: SourceName;
+  /**
+   * "paper": in the order of the paper's bibliography, with its numbering
+   * (labels); "source": in the order the API returned.
+   */
+  order?: "paper" | "source";
   fetchedAt: string;
   references: Reference[];
   /** Non-fatal problems, e.g. "Semantic Scholar: rate limited, used OpenAlex". */

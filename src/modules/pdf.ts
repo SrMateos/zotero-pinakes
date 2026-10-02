@@ -10,8 +10,14 @@ import {
   titleInEntry,
   type BibEntry,
 } from "./bibliography";
-import { arxivFromURL, normalizeDOI, parseArxivId } from "./identifiers";
-import { getJSON, SourceError, type StatusCallback } from "./sources";
+import { normalizeDOI } from "./identifiers";
+import { arxivInText, entryReference, orderByPaper } from "./ordering";
+import {
+  getJSON,
+  SourceError,
+  sourceLabel,
+  type StatusCallback,
+} from "./sources";
 import type { PaperId, RefKind, Reference, ReferenceList } from "./types";
 
 const CROSSREF_BASE = "https://api.crossref.org";
@@ -95,7 +101,7 @@ export async function referencesFromPdf(
       const wait = CROSSREF_SPACING_MS - (Date.now() - started);
       if (wait > 0) await Zotero.Promise.delay(wait);
     }
-    ref ??= fallbackReference(entry, i + 1);
+    ref ??= entryReference(entry, i + 1);
     if (!ref.unresolved) resolved++;
     references.push(ref);
   }
@@ -107,6 +113,7 @@ export async function referencesFromPdf(
   return {
     paperId,
     source: "pdf",
+    order: "paper",
     fetchedAt: new Date().toISOString(),
     references,
     notes,
@@ -160,30 +167,63 @@ async function resolveEntry(
   return undefined;
 }
 
-function arxivInText(text: string) {
-  const m = text.match(
-    /arxiv[:\s]*(?:preprint\s+)?(?:arxiv:)?\s*(\d{4}\.\d{4,5}|[a-z-]+\/\d{7})/i,
-  );
-  return (m ? parseArxivId(m[1]) : undefined) ?? arxivFromURL(text);
-}
-
 /**
- * An entry Crossref could not match. If its text contains a DOI or an arXiv
- * ID it can still be imported; otherwise it is shown as plain text.
+ * Put an API list in the order of the paper's bibliography, read locally
+ * from the PDF (no network). If the PDF or its bibliography is unavailable,
+ * or too few entries match (probably a different PDF or a parsing
+ * problem), the API order is kept and a note says why.
  */
-function fallbackReference(entry: BibEntry, index: number): Reference {
-  const doi = normalizeDOI(entry.text);
-  const arxiv = arxivInText(entry.text);
-  return {
-    index,
-    label: entry.label,
-    raw: entry.text,
-    title: entry.text,
-    authors: [],
-    year: entryYear(entry.text),
-    doi,
-    arxiv,
-    kind: arxiv && !doi ? "preprint" : "other",
-    unresolved: !doi && !arxiv,
-  };
+export async function applyPaperOrder(
+  item: Zotero.Item,
+  list: ReferenceList,
+): Promise<ReferenceList> {
+  const label = sourceLabel(list.source);
+  let entries;
+  try {
+    ({ entries } = await readBibliography(item));
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    return {
+      ...list,
+      order: "source",
+      notes: [
+        ...list.notes,
+        `In ${label}'s order, which may differ from the paper's: ${reason}`,
+      ],
+    };
+  }
+  const result = orderByPaper(list.references, entries);
+  const enough = Math.max(
+    3,
+    Math.min(entries.length, list.references.length) * 0.3,
+  );
+  if (result.matched < enough) {
+    log(
+      `Paper order: only ${result.matched} of ${entries.length} entries matched`,
+    );
+    return {
+      ...list,
+      order: "source",
+      notes: [
+        ...list.notes,
+        `In ${label}'s order: the PDF bibliography (${entries.length} entries) does not match this list well enough to reorder it.`,
+      ],
+    };
+  }
+  log(
+    `Paper order: ${result.matched} of ${entries.length} entries matched, ${result.extra} extra`,
+  );
+  const notes = [...list.notes];
+  const missing = entries.length - result.matched;
+  if (missing) {
+    notes.push(
+      `${missing} of the paper's ${entries.length} references are not in ${label}; they are shown from the PDF text.`,
+    );
+  }
+  if (result.extra) {
+    notes.push(
+      `${result.extra} references from ${label} were not found in the PDF bibliography; they are listed at the end.`,
+    );
+  }
+  return { ...list, references: result.references, order: "paper", notes };
 }

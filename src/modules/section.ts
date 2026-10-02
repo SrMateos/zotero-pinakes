@@ -16,7 +16,7 @@ import {
   type TargetMode,
 } from "./importer";
 import { findInLibrary, getPaperId } from "./library";
-import { referencesFromPdf } from "./pdf";
+import { applyPaperOrder, referencesFromPdf } from "./pdf";
 import { describe, fetchReferences, sourceLabel } from "./sources";
 import type { PaperId, Reference, ReferenceList } from "./types";
 
@@ -259,7 +259,10 @@ async function loadList(
   if (paperId) {
     onStatus(`Fetching references for ${describe(paperId)}…`);
     try {
-      const list = await fetchReferences(paperId, onStatus);
+      const fetched = await fetchReferences(paperId, onStatus);
+      if (state.token !== token) return undefined;
+      onStatus("Ordering as in the paper's bibliography…");
+      const list = await applyPaperOrder(item, fetched);
       await setCached(item, list);
       return list;
     } catch (e) {
@@ -516,7 +519,9 @@ function renderList(state: SectionState) {
 
   const source = query(state, ".pinakes-source");
   if (source) {
-    source.textContent = `${list.references.length} from ${sourceLabel(list.source)}`;
+    source.textContent =
+      `${list.references.length} from ${sourceLabel(list.source)}` +
+      (list.order === "paper" && list.source !== "pdf" ? ", paper order" : "");
     source.title = `Fetched ${new Date(list.fetchedAt).toLocaleString()}`;
   }
   const hasRefs = list.references.length > 0;
