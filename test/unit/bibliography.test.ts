@@ -97,3 +97,33 @@ test("entryYear and titleInEntry", () => {
     ),
   );
 });
+
+test("bracketed entries that share a paragraph (IEEE layout)", () => {
+  const text = [
+    "References",
+    "[1] M. Chen et al., “Evaluating large language models trained on code,” 2021. [2] A. Eghbali and M. Pradel, “De-hallucinator,” CoRR, 2024.",
+    "[3] N. Jiang, “Impact of code language models,” in ICSE, 2023. [5] S. B. Hossain, “Togll,” in ICSE, 2025. [6] C. S. Xia, “Fuzz4all,” in ICSE, 2024.",
+    "[Online]. Available: https://example.org [7] I. Bouzenia, “RepairAgent,” 2025.",
+  ].join("\n");
+  const result = extractBibliography(text)!;
+  assert.deepEqual(
+    result.entries.map((e) => e.label),
+    ["1", "2", "3", "5", "6", "7"],
+  );
+  assert.match(result.entries[4].text, /Fuzz4all.*\[Online\]/);
+  assert.match(result.entries[5].text, /^I\. Bouzenia/);
+});
+
+test("bracketed labels glued to the text ([1]M. Chen)", () => {
+  const text = [
+    "REFERENCES",
+    "[1]M. Chen et al., “Evaluating large language models trained on code,” 2021.",
+    "[2]A. Eghbali and M. Pradel, “De-hallucinator,”CoRR, 2024. [3]S. Barke, “Grounded copilot,” 2023.",
+  ].join("\n");
+  const result = extractBibliography(text)!;
+  assert.equal(result.style, "bracket");
+  assert.deepEqual(
+    result.entries.map((e) => e.label),
+    ["1", "2", "3"],
+  );
+});

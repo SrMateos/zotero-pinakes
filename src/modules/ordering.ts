@@ -60,7 +60,11 @@ export function orderByPaper(references: Reference[], entries: BibEntry[]) {
   const ordered: Reference[] = [];
   let matched = 0;
   for (const entry of entries) {
-    const ref = [...unused].find((r) => sameWork(r, entry));
+    // A paper may cite the same work twice under two numbers, so fall back
+    // to references already taken by an earlier entry.
+    const ref =
+      [...unused].find((r) => sameWork(r, entry)) ??
+      references.find((r) => !unused.has(r) && sameWork(r, entry));
     if (ref) {
       unused.delete(ref);
       matched++;
@@ -76,5 +80,17 @@ export function orderByPaper(references: Reference[], entries: BibEntry[]) {
     references: ordered.map((ref, i) => ({ ...ref, index: i + 1 })),
     matched,
     extra: unused.size,
+    complete: isComplete(entries),
   };
+}
+
+/**
+ * True if the bibliography is numbered 1..N with no gaps, i.e. it was
+ * extracted completely. API references missing from a complete
+ * bibliography are not cited by the paper (often headings or captions
+ * that the API's own PDF parser took for references).
+ */
+export function isComplete(entries: BibEntry[]) {
+  if (!entries.length) return false;
+  return entries.every((e, i) => e.label === String(i + 1));
 }

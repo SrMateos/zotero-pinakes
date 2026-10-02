@@ -3,6 +3,8 @@
 import zotero from "@zotero-plugin/eslint-config";
 
 export default zotero({
+  // Local diagnostic tests, not part of the repository (see .gitignore).
+  ignores: ["test/debug/**"],
   overrides: [
     {
       // Integration tests group several suites in one file.

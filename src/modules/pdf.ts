@@ -220,10 +220,18 @@ export async function applyPaperOrder(
       `${missing} of the paper's ${entries.length} references are not in ${label}; they are shown from the PDF text.`,
     );
   }
-  if (result.extra) {
+  let references = result.references;
+  if (result.extra && result.complete) {
+    // The bibliography was read completely ([1]..[N]), so these are not
+    // references of the paper.
+    references = references.filter((r) => r.label);
+    notes.push(
+      `Hidden ${result.extra} entries from ${label} that are not in the paper's bibliography (usually headings its PDF parser mistook for references).`,
+    );
+  } else if (result.extra) {
     notes.push(
       `${result.extra} references from ${label} were not found in the PDF bibliography; they are listed at the end.`,
     );
   }
-  return { ...list, references: result.references, order: "paper", notes };
+  return { ...list, references, order: "paper", notes };
 }

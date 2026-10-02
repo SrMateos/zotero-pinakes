@@ -27,7 +27,6 @@ const END_HEADING =
 /** "A Additional details", "A.1 Illustration of …": appendix sections. */
 const APPENDIX_SECTION = /^\s*[A-Z](?:\.\d+)*\s+[A-Z][a-z]+(?:\s+\S+){0,8}\s*$/;
 
-const BRACKET = /^\s*\[(\d{1,4})\]\s*/;
 const NUMBERED = /^\s*(\d{1,4})\.\s+(?=\S)/;
 
 /** Lines repeated on many pages (running headers and footers). */
@@ -108,7 +107,12 @@ function isSequential(lines: string[], re: RegExp) {
 
 /** Detect the numbering style used by the bibliography lines. */
 export function detectStyle(lines: string[]): BibStyle {
-  const bracket = countMatches(lines, BRACKET);
+  // Count "[n] Author" labels anywhere in a line: several entries can
+  // share one paragraph of extracted text.
+  const bracket = lines.reduce(
+    (n, l) => n + (l.match(/(?:^|\s)\[\d{1,4}\]\s*\p{Lu}/gu)?.length ?? 0),
+    0,
+  );
   const numbered = countMatches(lines, NUMBERED);
   if (bracket >= 3 && bracket >= numbered) return "bracket";
   if (isSequential(lines, NUMBERED)) return "numbered";
@@ -122,6 +126,45 @@ function appendText(entry: string, line: string) {
     return entry.slice(0, -1) + line;
   }
   return `${entry} ${line}`;
+}
+
+/** How far ahead to look for the next label when one is missing. */
+const MAX_LABEL_GAP = 3;
+
+/**
+ * Split "[1] … [2] …" entries. Labels are searched in sequence over the
+ * whole text rather than at line starts, because the PDF text often has
+ * several entries in one paragraph ("… ICSE, 2025. [12] C. S. Xia …"). At
+ * each step the nearest of [n], [n+1] … [n+3] is taken, so a label lost
+ * in extraction does not stop the split.
+ */
+function splitBracketed(lines: string[]): BibEntry[] {
+  const text = lines.reduce(appendText, "");
+  const first = text.match(/\[(\d{1,4})\]/);
+  if (!first) return [];
+  const starts: Array<{ label: number; at: number; end: number }> = [];
+  let expected = Number(first[1]);
+  let pos = first.index!;
+  for (;;) {
+    let best: { label: number; at: number; end: number } | undefined;
+    for (let k = expected; k <= expected + MAX_LABEL_GAP; k++) {
+      const re = new RegExp(String.raw`(^|\s)\[${k}\]\s*`, "g");
+      re.lastIndex = pos;
+      const m = re.exec(text);
+      if (!m) continue;
+      const at = m.index + m[1].length;
+      if (!best || at < best.at)
+        best = { label: k, at, end: m.index + m[0].length };
+    }
+    if (!best) break;
+    starts.push(best);
+    expected = best.label + 1;
+    pos = best.end;
+  }
+  return starts.map((start, i) => ({
+    label: String(start.label),
+    text: text.slice(start.end, starts[i + 1]?.at ?? text.length).trim(),
+  }));
 }
 
 /** Does this line look like the start of a new author-year entry? */
@@ -147,15 +190,17 @@ export function splitEntries(lines: string[]): {
   const style = detectStyle(lines);
   const raw: BibEntry[] = [];
 
-  if (style === "bracket" || style === "numbered") {
-    const re = style === "bracket" ? BRACKET : NUMBERED;
+  if (style === "bracket") {
+    raw.push(...splitBracketed(lines));
+  } else if (style === "numbered") {
+    const re = NUMBERED;
     let expected = 1;
     let current: BibEntry | undefined;
     for (const line of lines) {
       const m = line.match(re);
       // For "1." numbering, only accept the next number, so that lines such
       // as "2019. Some title" inside an entry do not split it.
-      if (m && (style === "bracket" || Number(m[1]) === expected)) {
+      if (m && Number(m[1]) === expected) {
         current = { label: m[1], text: line.slice(m[0].length).trim() };
         raw.push(current);
         expected = Number(m[1]) + 1;

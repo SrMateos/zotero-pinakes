@@ -48,3 +48,27 @@ test("orderByPaper follows the bibliography and keeps its numbers", () => {
   assert.equal(result.references[1].title, "Adam"); // matched by arXiv ID
   assert.equal(result.references[4].title, "Something only the API has");
 });
+
+test("orderByPaper reuses a reference cited twice", () => {
+  const api = [ref(1, "Evaluating agent-based program repair at Google")];
+  const entries = [
+    {
+      label: "1",
+      text: "P. Rondon et al., “Evaluating agent-based program repair at google,” arXiv, 2025.",
+    },
+    {
+      label: "2",
+      text: "P. Rondon et al., “Evaluating agent-based program repair at google,” 2025.",
+    },
+  ];
+  const result = orderByPaper(api, entries);
+  assert.equal(result.matched, 2);
+  assert.equal(result.complete, true);
+  assert.deepEqual(
+    result.references.map((r) => [r.label, r.title]),
+    [
+      ["1", "Evaluating agent-based program repair at Google"],
+      ["2", "Evaluating agent-based program repair at Google"],
+    ],
+  );
+});
