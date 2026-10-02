@@ -102,6 +102,48 @@ export function describe(paperId: PaperId | undefined) {
 }
 
 // ---------------------------------------------------------------------------
+// Response shapes (only the fields we read; every field may be missing)
+// ---------------------------------------------------------------------------
+
+interface S2Paper {
+  title?: string | null;
+  authors?: Array<{ name?: string | null }> | null;
+  year?: number | null;
+  venue?: string | null;
+  abstract?: string | null;
+  publicationTypes?: string[] | null;
+  externalIds?: { DOI?: string; ArXiv?: string } | null;
+}
+
+interface S2ReferencesPage {
+  next?: number;
+  data?: Array<{ citedPaper?: S2Paper | null }>;
+}
+
+interface OpenAlexWork {
+  id?: string;
+  doi?: string | null;
+  display_name?: string | null;
+  publication_year?: number | null;
+  type?: string | null;
+  authorships?: Array<{ author?: { display_name?: string | null } }>;
+  primary_location?: {
+    source?: { display_name?: string | null; type?: string | null } | null;
+  } | null;
+  locations?: Array<{
+    landing_page_url?: string | null;
+    pdf_url?: string | null;
+  }>;
+  abstract_inverted_index?: Record<string, number[]> | null;
+  referenced_works?: string[];
+}
+
+/** Non-empty strings only. */
+function names(values: Array<string | null | undefined>) {
+  return values.filter((n): n is string => typeof n === "string" && !!n);
+}
+
+// ---------------------------------------------------------------------------
 // HTTP with retry/backoff
 // ---------------------------------------------------------------------------
 
@@ -110,12 +152,12 @@ export function describe(paperId: PaperId | undefined) {
  * exponential backoff (honouring Retry-After), reporting each wait through
  * onStatus. Returns null on 404.
  */
-export async function getJSON(
+export async function getJSON<T>(
   url: string,
   label: string,
   onStatus: StatusCallback,
   headers: Record<string, string> = {},
-): Promise<any | null> {
+): Promise<T | null> {
   for (let attempt = 0; ; attempt++) {
     let xhr: XMLHttpRequest | undefined;
     let failure = "network error";
@@ -197,9 +239,10 @@ function retryDelay(xhr: XMLHttpRequest | undefined, attempt: number) {
   );
 }
 
-function errorDetail(response: any): string {
+function errorDetail(response: unknown): string {
   if (!response || typeof response !== "object") return "";
-  const detail = response.error || response.message || response.detail;
+  const { error, message, detail: text } = response as Record<string, unknown>;
+  const detail = error || message || text;
   return typeof detail === "string" ? detail : "";
 }
 
@@ -227,7 +270,7 @@ async function fetchSemanticScholar(
     const url =
       `${S2_BASE}/paper/${s2PaperPath(paperId)}/references` +
       `?fields=${S2_FIELDS}&offset=${offset}&limit=${S2_PAGE_SIZE}`;
-    const page = await getJSON(url, label, onStatus, headers);
+    const page = await getJSON<S2ReferencesPage>(url, label, onStatus, headers);
     if (page === null) {
       throw new SourceError(
         `${label} does not know this paper (HTTP 404).`,
@@ -244,7 +287,10 @@ async function fetchSemanticScholar(
   return references;
 }
 
-function fromSemanticScholar(paper: any, index: number): Reference | null {
+function fromSemanticScholar(
+  paper: S2Paper | null | undefined,
+  index: number,
+): Reference | null {
   if (!paper || !paper.title) return null;
   const ids = paper.externalIds ?? {};
   const doi = normalizeDOI(ids.DOI);
@@ -260,9 +306,7 @@ function fromSemanticScholar(paper: any, index: number): Reference | null {
   return {
     index,
     title: paper.title,
-    authors: (paper.authors ?? [])
-      .map((a: any) => a?.name)
-      .filter((n: unknown): n is string => typeof n === "string" && !!n),
+    authors: names((paper.authors ?? []).map((a) => a?.name)),
     year: typeof paper.year === "number" ? paper.year : undefined,
     venue,
     doi,
@@ -288,7 +332,7 @@ async function fetchOpenAlex(
   onStatus: StatusCallback,
 ): Promise<Reference[]> {
   const label = SOURCE_LABEL.openalex;
-  const work = await getJSON(
+  const work = await getJSON<OpenAlexWork>(
     `${OPENALEX_BASE}/${openAlexWorkPath(paperId)}?select=id,referenced_works`,
     label,
     onStatus,
@@ -296,12 +340,11 @@ async function fetchOpenAlex(
   if (work === null) {
     throw new SourceError(`${label} does not know this paper (HTTP 404).`, 404);
   }
-  const workIds: string[] = (work.referenced_works ?? [])
-    .map((url: string) => url.split("/").pop())
-    .filter(Boolean)
-    .slice(0, MAX_REFERENCES);
+  const workIds = names(
+    (work.referenced_works ?? []).map((url) => url.split("/").pop()),
+  ).slice(0, MAX_REFERENCES);
 
-  const byId = new Map<string, any>();
+  const byId = new Map<string, OpenAlexWork>();
   for (let i = 0; i < workIds.length; i += OPENALEX_BATCH) {
     const batch = workIds.slice(i, i + OPENALEX_BATCH);
     onStatus(
@@ -311,7 +354,11 @@ async function fetchOpenAlex(
       `${OPENALEX_BASE}/works?filter=ids.openalex:${batch.join("|")}` +
       `&per-page=${OPENALEX_BATCH}` +
       `&select=id,doi,display_name,publication_year,authorships,primary_location,locations,type,abstract_inverted_index`;
-    const page = await getJSON(url, label, onStatus);
+    const page = await getJSON<{ results?: OpenAlexWork[] }>(
+      url,
+      label,
+      onStatus,
+    );
     for (const result of page?.results ?? []) {
       byId.set(String(result.id).split("/").pop()!, result);
     }
@@ -325,7 +372,10 @@ async function fetchOpenAlex(
   return references;
 }
 
-function fromOpenAlex(work: any, index: number): Reference | null {
+function fromOpenAlex(
+  work: OpenAlexWork | undefined,
+  index: number,
+): Reference | null {
   if (!work || !work.display_name) return null;
   const doi = normalizeDOI(work.doi);
   let arxiv = arxivFromDOI(doi);
@@ -345,9 +395,9 @@ function fromOpenAlex(work: any, index: number): Reference | null {
   return {
     index,
     title: work.display_name,
-    authors: (work.authorships ?? [])
-      .map((a: any) => a?.author?.display_name)
-      .filter((n: unknown): n is string => typeof n === "string" && !!n),
+    authors: names(
+      (work.authorships ?? []).map((a) => a?.author?.display_name),
+    ),
     year:
       typeof work.publication_year === "number"
         ? work.publication_year

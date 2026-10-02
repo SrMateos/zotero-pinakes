@@ -126,6 +126,17 @@ const CROSSREF_KIND: Record<string, RefKind> = {
   "posted-content": "preprint",
 };
 
+/** A Crossref work (only the fields we select; any may be missing). */
+interface CrossrefWork {
+  DOI?: string;
+  title?: string[];
+  author?: Array<{ given?: string; family?: string; name?: string }>;
+  issued?: { "date-parts"?: number[][] };
+  "container-title"?: string[];
+  type?: string;
+  abstract?: string;
+}
+
 /** Query Crossref for one entry; undefined if nothing matches its title. */
 async function resolveEntry(
   entry: BibEntry,
@@ -136,9 +147,13 @@ async function resolveEntry(
   const url =
     `${CROSSREF_BASE}/works?query.bibliographic=${query}&rows=3` +
     `&select=DOI,title,author,issued,container-title,type,abstract`;
-  const data = await getJSON(url, "Crossref", onStatus);
+  const data = await getJSON<{ message?: { items?: CrossrefWork[] } }>(
+    url,
+    "Crossref",
+    onStatus,
+  );
   for (const work of data?.message?.items ?? []) {
-    const title = Array.isArray(work.title) ? work.title[0] : work.title;
+    const title = work.title?.[0];
     if (!title || !titleInEntry(title, entry.text)) continue;
     const doi = normalizeDOI(work.DOI);
     return {
@@ -147,21 +162,19 @@ async function resolveEntry(
       raw: entry.text,
       title,
       authors: (work.author ?? [])
-        .map(
-          (a: any) => [a.given, a.family].filter(Boolean).join(" ") || a.name,
-        )
-        .filter(Boolean),
+        .map((a) => [a.given, a.family].filter(Boolean).join(" ") || a.name)
+        .filter((n): n is string => !!n),
       year: work.issued?.["date-parts"]?.[0]?.[0] ?? entryYear(entry.text),
       venue: work["container-title"]?.[0] || undefined,
       doi,
       arxiv: arxivInText(entry.text),
       abstract: work.abstract
-        ? String(work.abstract)
+        ? work.abstract
             .replace(/<[^>]+>/g, " ")
             .replace(/\s+/g, " ")
             .trim()
         : undefined,
-      kind: CROSSREF_KIND[work.type] ?? "other",
+      kind: CROSSREF_KIND[work.type ?? ""] ?? "other",
     };
   }
   return undefined;

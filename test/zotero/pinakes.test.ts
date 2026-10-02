@@ -253,7 +253,10 @@ describe("item pane section", function () {
   afterEach(async function () {
     const test = this.currentTest;
     if (test?.state === "failed") {
-      Zotero.debug(`[Pinakes test] ${test.title}: ${test.err?.message}`);
+      const err = test.err as (Error & { stack?: string }) | undefined;
+      Zotero.debug(
+        `[Pinakes test] ${test.title}: ${err?.message ?? err}\n${err?.stack ?? ""}`,
+      );
     }
   });
 

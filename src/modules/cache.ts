@@ -20,7 +20,7 @@ function cacheKey(item: Zotero.Item) {
   return `${item.libraryID}_${item.key}`;
 }
 
-export function cacheDir() {
+function cacheDir() {
   return PathUtils.join(Zotero.DataDirectory.dir, "pinakes");
 }
 
@@ -76,8 +76,4 @@ export async function setCached(item: Zotero.Item, list: ReferenceList) {
   } catch (e) {
     log(`Could not write cache file ${path}`, e);
   }
-}
-
-export function clearMemoryCache() {
-  memory.clear();
 }

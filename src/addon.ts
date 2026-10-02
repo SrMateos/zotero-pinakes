@@ -10,8 +10,8 @@ class Addon {
     initialized: boolean;
   };
   public hooks: typeof hooks;
-  /** Only used by the integration tests. */
-  public testHooks = { hoverForTest };
+  /** Used by the integration tests; not exposed in release builds. */
+  public testHooks = __env__ === "production" ? undefined : { hoverForTest };
 
   constructor() {
     this.data = {

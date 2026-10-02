@@ -90,7 +90,7 @@ export function orderByPaper(references: Reference[], entries: BibEntry[]) {
  * bibliography are not cited by the paper (often headings or captions
  * that the API's own PDF parser took for references).
  */
-export function isComplete(entries: BibEntry[]) {
+function isComplete(entries: BibEntry[]) {
   if (!entries.length) return false;
   return entries.every((e, i) => e.label === String(i + 1));
 }

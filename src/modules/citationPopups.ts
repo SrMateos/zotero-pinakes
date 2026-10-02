@@ -12,11 +12,13 @@ import { log } from "../utils/log";
 import { getPref } from "../utils/prefs";
 import { titleInEntry } from "./bibliography";
 import { getCached } from "./cache";
+import { authorYear, button, h, referenceUrl } from "./dom";
 import { markerAt } from "./citations";
 import {
   checkTargetEditable,
   importReference,
   resolveTarget,
+  type ImportTarget,
   type TargetMode,
 } from "./importer";
 import { findInLibrary, getPaperId } from "./library";
@@ -27,6 +29,27 @@ import type { Reference, ReferenceList } from "./types";
 const STYLE_ID = "pinakes-citation-style";
 const HOVER_DELAY_MS = 300;
 const HIDE_DELAY_MS = 350;
+
+/**
+ * The parts of Zotero's ReaderInstance used here. `_internalReader`,
+ * `_primaryView` and `_iframeWindow` are internal to Zotero's reader, so
+ * every access is guarded.
+ */
+interface ReaderView {
+  _iframeWindow?: Window & { PDFViewerApplication?: unknown };
+}
+interface ReaderInstance {
+  itemID?: number;
+  tabID: string;
+  _type?: string;
+  _initPromise?: Promise<unknown>;
+  _internalReader?: { _primaryView?: ReaderView; _secondaryView?: ReaderView };
+}
+
+function readerByTabID(tabID: string) {
+  return Zotero.Reader.getByTabID(tabID) as unknown as
+    ReaderInstance | undefined;
+}
 
 /** What a cited number points to. */
 interface Card {
@@ -60,7 +83,10 @@ export function registerCitationPopups() {
     onRenderToolbar,
     config.addonID,
   );
-  for (const reader of (Zotero.Reader as any)._readers ?? []) {
+  const { _readers } = Zotero.Reader as unknown as {
+    _readers?: ReaderInstance[];
+  };
+  for (const reader of _readers ?? []) {
     void attachReader(reader);
   }
 }
@@ -78,7 +104,7 @@ export function unregisterCitationPopups() {
  * Returns whether a popup is shown afterwards.
  */
 export async function hoverForTest(tabID: string, x: number, y: number) {
-  const reader: any = Zotero.Reader.getByTabID(tabID);
+  const reader = readerByTabID(tabID);
   const doc: Document | undefined =
     reader?._internalReader?._primaryView?._iframeWindow?.document;
   const check = doc && checkers.get(doc);
@@ -89,17 +115,17 @@ export async function hoverForTest(tabID: string, x: number, y: number) {
 
 /** Called when a reader tab is selected, in case its view was recreated. */
 export function attachReaderByTabID(tabID: string) {
-  const reader = Zotero.Reader.getByTabID(tabID);
+  const reader = readerByTabID(tabID);
   if (reader) void attachReader(reader);
 }
 
-function onRenderToolbar(event: { reader: any }) {
-  void attachReader(event.reader);
+function onRenderToolbar(event: { reader: unknown }) {
+  void attachReader(event.reader as ReaderInstance);
 }
 
-async function attachReader(reader: any) {
+async function attachReader(reader: ReaderInstance) {
   try {
-    if ((reader._type ?? reader.type ?? "pdf") !== "pdf") return;
+    if ((reader._type ?? "pdf") !== "pdf") return;
     await reader._initPromise;
     // The PDF view iframe is created after the reader itself.
     for (let i = 0; i < 60; i++) {
@@ -112,7 +138,7 @@ async function attachReader(reader: any) {
         // about:blank document.
         if (
           doc?.getElementById("viewerContainer") &&
-          win.PDFViewerApplication
+          win?.PDFViewerApplication
         ) {
           attachDoc(reader, doc);
           found = true;
@@ -126,7 +152,8 @@ async function attachReader(reader: any) {
   }
 }
 
-function citingItemOf(reader: any): Zotero.Item | undefined {
+function citingItemOf(reader: ReaderInstance): Zotero.Item | undefined {
+  if (reader.itemID === undefined) return undefined;
   const attachment = Zotero.Items.get(reader.itemID);
   return (attachment && attachment.parentItem) || undefined;
 }
@@ -263,7 +290,7 @@ const CSS = `
 .pinakes-citation-popup button { font: inherit; font-size: 12px; padding: 1px 8px; cursor: pointer; }
 `;
 
-function attachDoc(reader: any, doc: Document) {
+function attachDoc(reader: ReaderInstance, doc: Document) {
   if (attachedDocs.has(doc)) return;
   attachedDocs.add(doc);
   const win = doc.defaultView!;
@@ -368,30 +395,13 @@ function position(win: Window, popup: HTMLElement, rect: DOMRect) {
   popup.style.top = `${top}px`;
 }
 
-function authorYear(ref: Reference) {
-  const surname = ref.authors[0]?.trim().split(/\s+/).pop();
-  const who = surname
-    ? ref.authors.length > 1
-      ? `${surname} et al.`
-      : surname
-    : undefined;
-  return [who, ref.year].filter(Boolean).join(", ");
-}
-
 async function renderPopup(
   doc: Document,
   item: Zotero.Item,
   mapping: Mapping,
   hit: Hit,
 ) {
-  const el = (tag: string, className?: string, text?: string) => {
-    const node = doc.createElement(tag);
-    if (className) node.className = className;
-    if (text !== undefined) node.textContent = text;
-    return node;
-  };
-  const popup = el("div", "pinakes-citation-popup");
-
+  const popup = h(doc, "div", "pinakes-citation-popup");
   const target = resolveTarget(item, getPref("targetMode") as TargetMode);
   const refs = hit.numbers
     .map((n) => mapping.cards.get(n)?.ref)
@@ -405,34 +415,35 @@ async function renderPopup(
 
   for (const n of hit.numbers) {
     const card = mapping.cards.get(n);
-    const box = el("div", "pk-card");
     const ref = card?.ref;
+    const box = h(doc, "div", "pk-card");
     if (!card) {
-      box.append(el("div", "pk-note", `[${n}] Not in the reference list.`));
+      box.append(h(doc, "div", "pk-note", `[${n}] Not in the reference list.`));
     } else if (!ref) {
       box.append(
-        el("div", "pk-title", `[${n}]`),
-        el("div", "pk-abstract", card.raw ?? ""),
-        el("div", "pk-note", "Not matched to an online record."),
+        h(doc, "div", "pk-title", `[${n}]`),
+        h(doc, "div", "pk-abstract", card.raw ?? ""),
+        h(doc, "div", "pk-note", "Not matched to an online record."),
       );
     } else {
-      box.append(el("div", "pk-title", `[${n}] ${ref.title}`));
+      box.append(h(doc, "div", "pk-title", `[${n}] ${ref.title}`));
       const meta = [authorYear(ref), ref.venue].filter(Boolean).join(" · ");
-      if (meta) box.append(el("div", "pk-meta", meta));
+      if (meta) box.append(h(doc, "div", "pk-meta", meta));
       if (ref.abstract) {
         const text =
           ref.abstract.length > 320
             ? `${ref.abstract.slice(0, 320)}…`
             : ref.abstract;
-        box.append(el("div", "pk-abstract", text));
+        box.append(h(doc, "div", "pk-abstract", text));
       }
-      box.append(renderActions(el, ref, target, matches));
+      box.append(renderActions(doc, ref, target, matches.get(ref.index)));
     }
     popup.append(box);
   }
   if (mapping.approximate) {
     popup.append(
-      el(
+      h(
+        doc,
         "div",
         "pk-note",
         `Numbers follow ${sourceLabel(mapping.source)}'s order and may not match the paper.`,
@@ -443,56 +454,37 @@ async function renderPopup(
 }
 
 function renderActions(
-  el: (tag: string, className?: string, text?: string) => HTMLElement,
+  doc: Document,
   ref: Reference,
-  target: ReturnType<typeof resolveTarget>,
-  matches: Map<number, number>,
+  target: ImportTarget,
+  inLibrary: number | undefined,
 ) {
-  const actions = el("div", "pk-actions");
-  const url = ref.doi
-    ? `https://doi.org/${ref.doi}`
-    : ref.arxiv
-      ? `https://arxiv.org/abs/${ref.arxiv}`
-      : undefined;
-  if (url) {
-    const open = el("button", undefined, "Open");
-    open.addEventListener("click", () => Zotero.launchURL(url));
-    actions.append(open);
-  }
-  const inLibrary = matches.get(ref.index);
+  const actions = h(doc, "div", "pk-actions");
+  const url = referenceUrl(ref);
+  if (url) actions.append(button(doc, "Open", () => Zotero.launchURL(url)));
   if (inLibrary) {
-    actions.append(el("span", "pk-note", "In library"));
-  } else {
-    const importBtn = el("button", undefined, "Import") as HTMLButtonElement;
-    importBtn.title = `Import to ${target.label}`;
-    importBtn.addEventListener("click", async () => {
-      importBtn.disabled = true;
-      importBtn.textContent = "Importing…";
-      try {
-        checkTargetEditable(target);
-        const { method } = await importReference(ref, target);
-        importBtn.replaceWith(
-          el(
-            "span",
-            "pk-note",
-            method === "metadata"
-              ? "Imported (from metadata)"
-              : `Imported to ${target.label}`,
-          ),
-        );
-      } catch (e) {
-        importBtn.textContent = "Import";
-        importBtn.disabled = false;
-        actions.append(
-          el(
-            "span",
-            "pk-note",
-            `Import failed: ${e instanceof Error ? e.message : e}`,
-          ),
-        );
-      }
-    });
-    actions.append(importBtn);
+    actions.append(h(doc, "span", "pk-note", "In library"));
+    return actions;
   }
+  const importBtn = button(doc, "Import", async () => {
+    importBtn.disabled = true;
+    importBtn.textContent = "Importing…";
+    try {
+      checkTargetEditable(target);
+      const { method } = await importReference(ref, target);
+      const done =
+        method === "metadata"
+          ? "Imported (from metadata)"
+          : `Imported to ${target.label}`;
+      importBtn.replaceWith(h(doc, "span", "pk-note", done));
+    } catch (e) {
+      importBtn.textContent = "Import";
+      importBtn.disabled = false;
+      const message = e instanceof Error ? e.message : String(e);
+      actions.append(h(doc, "span", "pk-note", `Import failed: ${message}`));
+    }
+  });
+  importBtn.title = `Import to ${target.label}`;
+  actions.append(importBtn);
   return actions;
 }

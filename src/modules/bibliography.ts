@@ -50,7 +50,7 @@ function furniture(lines: string[]) {
  * "References"-like heading, up to an appendix-like heading, without page
  * furniture. Returns undefined if no heading is found.
  */
-export function findBibliography(text: string): string[] | undefined {
+function findBibliography(text: string): string[] | undefined {
   const lines = text.split(/\r?\n/);
   let start = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -106,7 +106,7 @@ function isSequential(lines: string[], re: RegExp) {
 }
 
 /** Detect the numbering style used by the bibliography lines. */
-export function detectStyle(lines: string[]): BibStyle {
+function detectStyle(lines: string[]): BibStyle {
   // Count "[n] Author" labels anywhere in a line: several entries can
   // share one paragraph of extracted text.
   const bracket = lines.reduce(
@@ -183,7 +183,7 @@ function startsAuthorYearEntry(line: string, previous: string) {
  * labels; author-year entries are one paragraph each, with continuation
  * lines (after a page break) joined to the previous entry.
  */
-export function splitEntries(lines: string[]): {
+function splitEntries(lines: string[]): {
   style: BibStyle;
   entries: BibEntry[];
 } {
