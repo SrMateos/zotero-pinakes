@@ -138,22 +138,50 @@ is shown in the section.
 
 ## Development
 
-You need Node.js (LTS) and Zotero 7 or later.
+### Requirements
+
+- Node.js (LTS) and npm
+- Zotero 7 or later, for `npm start` and the integration tests
+
+### First-time setup
+
+After cloning, install the development dependencies. The build tools,
+including the `zotero-plugin` command, live in `node_modules/` and are
+not committed:
 
 ```sh
-npm install
+npm ci                 # installs the exact versions in package-lock.json
 cp .env.example .env   # set the Zotero binary, and a separate profile and data directory
-npm start              # development build with hot reload
-npm run build          # release build: .scaffold/build/pinakes.xpi
-npm test               # unit tests (Node only)
-npm run test:zotero    # integration tests in a throwaway Zotero profile (needs network)
-npm run lint:check
 ```
 
-The integration tests send Zotero's output to
-`.scaffold/test/zotero-output.log`.
+Run `npm ci` again whenever `package-lock.json` changes, for example after
+a pull. Use `npm install <package>` only to add or upgrade a dependency;
+it rewrites the lockfile.
 
-Source overview (`src/modules/`):
+If a script fails with `zotero-plugin: not found` (or `tsc`, `eslint`,
+`prettier: not found`), the dependencies are not installed: run `npm ci`.
+
+### Commands
+
+| Command               | What it does                                                             |
+| --------------------- | ------------------------------------------------------------------------ |
+| `npm start`           | Development build; starts Zotero with the plugin and reloads on changes. |
+| `npm run build`       | Release build to `.scaffold/build/pinakes.xpi`, then a type check.       |
+| `npm test`            | Unit tests, in Node only.                                                |
+| `npm run test:zotero` | Integration tests in a throwaway Zotero profile (needs network).         |
+| `npm run lint:check`  | Prettier and ESLint, without changing files.                             |
+| `npm run lint:fix`    | Prettier and ESLint, fixing what they can.                               |
+
+`npm start` and `npm run test:zotero` read `.env`. The integration tests
+send Zotero's output to `.scaffold/test/zotero-output.log`.
+
+To try a build in your everyday Zotero, install
+`.scaffold/build/pinakes.xpi` with **Tools → Plugins → Install Plugin From
+File…**.
+
+### Source overview
+
+Modules in `src/modules/`:
 
 | Module                                           | Responsibility                                                |
 | ------------------------------------------------ | ------------------------------------------------------------- |
@@ -165,8 +193,73 @@ Source overview (`src/modules/`):
 | `citations.ts`, `citationPopups.ts`              | Citation markers and reader popups                            |
 | `identifiers.ts`, `cache.ts`, `dom.ts`           | Shared helpers                                                |
 
-To release, run `npm run release`. It bumps the version, tags the commit
-and pushes. The GitHub workflow then builds the `.xpi` and publishes it.
+### Continuous integration
+
+Every push to `main` and every pull request runs
+[`ci.yml`](.github/workflows/ci.yml): `npm ci`, lint, unit tests and a
+build. The `.xpi` is kept as a workflow artifact (`pinakes-xpi`) on the
+run's page under **Actions**.
+
+## Releasing
+
+A release is driven by a git tag. Pushing a tag named `v<version>` (for
+example `v1.2.0`) starts [`release.yml`](.github/workflows/release.yml),
+which builds the plugin and publishes it on GitHub.
+
+### Steps
+
+1. Make sure `main` is clean, up to date with `origin` and CI is green.
+2. Run:
+
+   ```sh
+   npm run release
+   ```
+
+   It asks for the new version (patch, minor, major or a pre-release such
+   as `1.2.0-beta.0`) and asks you to confirm. Then it:
+   1. writes the version to `package.json` and `package-lock.json`;
+   2. runs `npm run build`;
+   3. commits as `chore(publish): release v<version>`;
+   4. creates the tag `v<version>`;
+   5. pushes the commit and the tag.
+
+3. Watch the **Release** run in the repository's **Actions** tab. It runs
+   `npm run release` again; on CI this skips the steps above and instead:
+   - creates the GitHub release `v<version>`, with the changelog built
+     from the commit messages since the previous tag, and attaches
+     `pinakes.xpi`;
+   - uploads `update.json` and `update-beta.json` to a special
+     pre-release tagged `release` ("Release Manifest"). Installed copies
+     of Pinakes read that file to find updates, so do not delete it.
+
+Pre-releases (versions with a `-`) are marked as such on GitHub and only
+update `update-beta.json`, so users on `update.json` are not moved to a
+beta.
+
+### Version numbers
+
+Versions follow [semantic versioning](https://semver.org/):
+`major.minor.patch`. Bump the patch for fixes, the minor for new features,
+and the major for changes that break existing behaviour or settings.
+
+### If something goes wrong
+
+- **The commit was pushed but no Release run started.** The tag is
+  missing. Check with `git ls-remote --tags origin`. Create and push it on
+  the release commit:
+
+  ```sh
+  git tag v1.2.0 <release-commit>
+  git push origin v1.2.0
+  ```
+
+- **The Release run failed.** Fix the cause, then rerun it from the
+  Actions tab. If the fix needs a new commit, delete the tag locally and
+  on GitHub (`git tag -d v1.2.0 && git push origin :refs/tags/v1.2.0`),
+  delete the GitHub release if one was created, and release again.
+
+- **Never move a tag that was already published.** Users and Zotero's
+  updater may have the old build. Release a new patch version instead.
 
 ## About the name
 
