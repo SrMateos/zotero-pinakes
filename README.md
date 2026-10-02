@@ -1,230 +1,182 @@
 # Pinakes for Zotero
 
-Pinakes is a Zotero 7+ plugin that shows the **reference list of the paper
-you are reading** in a side-pane section. You can import any cited work into
-your library in one click, the same way Zotero's "Add Item by Identifier"
-does.
+Pinakes shows the reference list of the paper you are reading, right in
+Zotero's item pane, and imports any cited work into your library with one
+click.
 
-It is a from-scratch, readable reimplementation of the core features of
-"Zotero Reference". No code was taken from that project.
+It works with Zotero 7 and later, including group libraries. The plugin is
+written in plain, unminified TypeScript, has no runtime dependencies and
+sends no telemetry.
 
-## The name
+## Features
 
-The _Pinakes_ (Πίνακες, "tables") was the catalogue of the Library of
-Alexandria, compiled by Callimachus of Cyrene in the 3rd century BC. It is
-often called the first library catalogue. This plugin shows the catalogue of
-the works a paper cites.
+- **Reference list in the item pane.** A Pinakes section appears next to
+  the PDF reader and in the library view. It lists the references of the
+  selected item, or of the parent item of the open PDF.
+- **In the paper's own order.** References are numbered as in the paper's
+  bibliography (`[1]`, `[2]`, …), not in the order an API returns them.
+  See [How references are ordered](#how-references-are-ordered).
+- **One-click import.** Each reference is imported the same way as Zotero's
+  _Add Item by Identifier_: by DOI, then arXiv ID. If neither resolves, the
+  item is created from the available metadata.
+- **"In library" detection.** References already in the target library are
+  matched by DOI, arXiv ID or title, and link to the existing item.
+- **Batch import.** You can import selected references (shift-click selects
+  a range) or every reference not yet in your library. A progress bar and a
+  Cancel button are shown while it runs.
+- **Filter.** Narrow the list by title, author, venue, year, DOI or arXiv
+  ID.
+- **PDF fallback.** If no API has the references, Pinakes reads the
+  bibliography from the PDF and resolves each entry through Crossref.
+- **Citation popups (experimental).** In the reader, hovering a marker such
+  as `[23]` or `[4, 7–9]` shows the cited references.
+- **Caching.** Lists are kept in memory and in
+  `<Zotero data directory>/pinakes/`. Press **Refresh** to fetch a list
+  again.
 
-## What it does
+## Installation
 
-- Adds a **Pinakes** section to the item pane. It shows in the PDF reader's
-  context pane, where it lists the references of the open PDF's parent item,
-  and in the library view for the selected item.
-- Finds the item's identifier: the **DOI** field first (or a `DOI:` line in
-  Extra), then an **arXiv ID** from the URL, Extra or Archive ID field. If
-  there is none, the section says so.
-- Fetches references from **Semantic Scholar**. If that fails or returns
-  nothing, it falls back to **OpenAlex**. Rate limits (HTTP 429) and server
-  errors are retried with exponential backoff. Every retry, fallback and
-  error is shown in the section.
-- **References are listed in the order of the paper's bibliography, with
-  the paper's own numbers.** The APIs do not return references in that
-  order: Semantic Scholar's first result for "Attention Is All You Need" is
-  the paper's reference [28]. So when the item has a PDF, Pinakes reads its
-  bibliography locally (no network) and matches every entry to the API
-  references by title, or else by the DOI or arXiv ID in the entry.
-  - Entries the API does not have are still listed, built from the PDF
-    text: importable if they contain a DOI or arXiv ID, otherwise plain
-    text with Copy.
-  - API references found in no entry go at the end, without a number.
-  - With no PDF, a bibliography that cannot be read, or too few matches,
-    the API order is kept and the section says so.
-  - The header shows "…, paper order" when the list follows the paper.
-- Each row shows the number, title, first author and year, and venue. Hover
-  over a row to see the abstract as a tooltip, or click it to expand the
-  abstract inline. Each row has three actions:
-  - **Import**: uses `Zotero.Translate.Search` with the DOI or arXiv ID. If
-    the reference has neither, or the identifier does not resolve, the item
-    is created from the API metadata (journal article, conference paper or
-    preprint).
-  - **Copy DOI**: copies the DOI to the clipboard.
-  - **Open**: opens the DOI or arXiv page in your browser.
-- References that are already in the target library show **In library**
-  instead of Import. They are matched by DOI, then arXiv ID, then normalised
-  title. Click it to select the existing item.
-- References are loaded as soon as an item is shown, so the list is ready
-  when you open the section from the side navigation. In the library view
-  the request waits 0.6 s, so that moving through items with the arrow keys
-  does not send a request per item.
-- Fetched lists are cached in memory and as JSON files in
-  `<Zotero data directory>/pinakes/`. **Refresh** re-fetches the list.
-- **Filter** box: type words to keep only references whose title, authors,
-  venue, year, DOI or arXiv ID contain all of them (accents and case are
-  ignored).
-- **Batch import**: tick references (shift-click selects a range) and press
-  **Import selected**, or press **Import all not in library**. With a filter
-  active, both act only on the references shown. A progress bar shows the
-  current item and can be cancelled. Imports run one after another. A
-  summary at the end reports how many were imported, how many were created
-  from metadata and how many failed; failed rows show the reason in red. If
-  you switch to another item mid-batch, the batch keeps going and reports in
-  a Zotero progress window.
+1. Download `pinakes.xpi` from the
+   [latest release](https://github.com/srmateos/zotero-pinakes/releases/latest).
+2. In Zotero, open **Tools → Plugins**, click the gear icon, choose
+   **Install Plugin From File…** and select the file.
 
-### PDF fallback
+Pinakes updates automatically through Zotero's plugin manager.
 
-When neither API has references for a paper, or the item has no DOI or
-arXiv ID, Pinakes can read the bibliography from the PDF:
+## Usage
 
-1. The PDF's text is extracted locally by Zotero (`Zotero.PDFWorker`).
-2. The bibliography is the text after the last "References" or
-   "Bibliography" heading, up to an appendix. Page numbers and running
-   headers are dropped, and entries split across pages are re-joined.
-   Bracketed (`[12]`), numbered (`12.`) and author-year styles are
-   recognised.
-3. Each entry is looked up in Crossref's bibliographic search. A match is
-   accepted only if the title Crossref returns appears in the entry text.
-   Requests go one at a time, at least 0.6 s apart.
-4. Matched entries become normal rows, numbered as in the paper. Entries
-   that Crossref does not match but that contain a DOI or arXiv ID can
-   still be imported. All other entries are shown as plain text with a
-   **Copy** button.
+Open a PDF, or select an item in the library, and click the Pinakes icon in
+the item pane's side navigation.
 
-In the PDF reader this runs automatically. In the library view the section
-shows a **Read the bibliography from the PDF** button instead, because it
-sends one Crossref request per entry. It can be turned off in Settings →
-Pinakes. The result is cached like any other list; press **Refresh** to try
-the APIs again.
+To find the references, the item needs a **DOI**, either in the DOI field
+or as a `DOI:` line in Extra. Failing that, it needs an **arXiv ID** in
+the URL, Extra or Archive ID field.
 
-### Citation popups in the reader (experimental)
+Each row has these actions:
 
-Turn this on in Settings → Pinakes → Experimental. In the PDF reader,
-pausing the mouse over a numeric citation marker such as `[23]` or
-`[4, 7–9]` then shows a card for each cited reference: title, authors,
-year, venue, the start of the abstract, and **Open** and **Import** (or "In
-library") buttons.
+| Action               | What it does                                                |
+| -------------------- | ----------------------------------------------------------- |
+| Import / In library  | Imports the reference, or selects the existing item.        |
+| Copy DOI             | Copies the DOI to the clipboard.                            |
+| Open                 | Opens the DOI (or the arXiv page) in your browser.          |
+| Copy (PDF-only rows) | Copies the text of a bibliography entry that has no record. |
 
-- The marker is read from the reader's text layer under the pointer.
-  Markers split across lines are handled.
-- Numbers are matched to the paper's own bibliography, which is read
-  locally from the PDF. Each entry is then matched by title to the API
-  reference, because the order of API results does not always follow the
-  paper's numbering. If the PDF uses author-year citations or its
-  bibliography cannot be read, the API order is used and the popup says so.
-- Popups appear only once the Pinakes section has loaded the reference
-  list for that paper.
-- Recent Zotero versions show their own popup for citations they detect.
-  When both appear, Zotero's popup shows the bibliography text and the
-  Pinakes popup adds the metadata and import buttons. This is why the
-  feature is off by default.
+Click a row to expand its abstract.
 
-### Where imports go
+## How references are ordered
 
-By default the target is the **collection currently selected in the main
-window**. If no collection is selected, items go to the root of the library
-that holds the PDF. You can change this in Settings → Pinakes to "the
-collection that contains the paper being read" or "always the library
-root". The current target is shown at the top of the section ("Import to:
-…").
+The Semantic Scholar and OpenAlex APIs do not return references in the
+paper's order. When the item has a PDF, Pinakes reads its bibliography
+locally, without any network request. It then matches each entry to the
+API records: by title first, then by the DOI or arXiv ID printed in the
+entry. The result:
 
-When the target is the collection you are viewing, Zotero selects each new
-item, just as "Add Item by Identifier" does. In the library view Pinakes
-then selects the paper you were looking at again, so its reference list
-stays open.
+- the list follows the paper and uses the paper's numbers, and the header
+  says "paper order";
+- entries the API lacks are still shown, built from the PDF text;
+- if the whole bibliography was read (`[1]` to `[N]` with no gaps), API
+  records that are not in it are hidden. These are usually headings that
+  the API's own PDF parser mistook for references. A note says how many
+  were hidden;
+- with no usable PDF, the API order is kept and a note explains why.
 
-The item is always created **in the library that owns the target
-collection**: `libraryID` and `collections` are both passed to
-`translate()`. Group libraries are supported. (The original plugin created
-items in the personal library and then added them to a group collection,
-which violates Zotero's `fki_collectionItems_libraryID` constraint.)
-Read-only libraries are refused with an error message.
+## Where imported items go
 
-## Network requests
+| Import target (Settings → Pinakes) | Where the item is created                                                                         |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Selected collection (default)      | The collection selected in the main window. If none is selected, the root of the paper's library. |
+| Paper's collection                 | The first collection containing the paper, or its library root.                                   |
+| Library root                       | Always the root of the paper's library.                                                           |
 
-The plugin itself contacts only these hosts:
+The current target is shown at the top of the section ("Import to: …").
 
-| When                         | Request                                                                                                                                                                                                                                                              |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Loading references (primary) | `GET https://api.semanticscholar.org/graph/v1/paper/{DOI:<doi> \| ARXIV:<id>}/references?fields=title,authors,year,venue,externalIds,abstract,publicationTypes&offset=<n>&limit=500`. If you set an API key, it is sent in the `x-api-key` header to this host only. |
-| Fallback                     | `GET https://api.openalex.org/works/doi:<doi>?select=id,referenced_works`. arXiv papers are looked up by their DataCite DOI, `10.48550/arxiv.<id>`.                                                                                                                  |
-| Fallback, details            | `GET https://api.openalex.org/works?filter=ids.openalex:W1\|W2…&per-page=50&select=id,doi,display_name,publication_year,authorships,primary_location,locations,type,abstract_inverted_index` (one request per 50 references)                                         |
-
-| PDF fallback only | `GET https://api.crossref.org/works?query.bibliographic=<entry text, max. 400 chars>&rows=3&select=DOI,title,author,issued,container-title,type,abstract` (one per bibliography entry, sequential) |
-
-`publicationTypes` is requested in addition to the fields you specified. It
-is used only to choose the item type when an item has to be created from
-metadata.
-
-Two actions cause other traffic, and only when you click them:
-
-- **Import** runs Zotero's own translators, exactly as "Add Item by
-  Identifier" does. Zotero then contacts doi.org, Crossref or DataCite for
-  DOIs, and arxiv.org for arXiv IDs, and may download an open-access PDF.
-  These requests are made by Zotero, not by the plugin.
-- **Open** opens `https://doi.org/<doi>` or `https://arxiv.org/abs/<id>` in
-  your browser.
-
-There is no telemetry, no analytics, and no other network access. The
-release build is not minified, so `content/scripts/pinakes.js` inside the
-`.xpi` can be read and audited directly.
+Items are created directly in the library that owns the target collection,
+so group libraries work. Read-only libraries are refused with an error.
 
 ## Settings
 
-**Settings → Pinakes** has:
+| Setting                  | Default          | Notes                                                                    |
+| ------------------------ | ---------------- | ------------------------------------------------------------------------ |
+| Semantic Scholar API key | empty            | Optional. Raises the rate limit; sent only to `api.semanticscholar.org`. |
+| Try first                | Semantic Scholar | The other source (OpenAlex) is always the fallback.                      |
+| PDF fallback             | on               | Automatic in the reader; started with a button in the library view.      |
+| Import target            | selected         | See [Where imported items go](#where-imported-items-go).                 |
+| Citation popups          | off              | Experimental. Recent Zotero versions also show their own citation popup. |
 
-- **Semantic Scholar API key** (optional). Without a key, Semantic Scholar
-  shares a low request rate among all anonymous users, so you may see 429
-  retries more often.
-- **Reference source**: which API to try first (Semantic Scholar or
-  OpenAlex). The other one is always tried as a fallback.
-- **Where imported references go**: the selected collection (default), the
-  collection that contains the paper being read, or always the library
-  root.
-- **PDF fallback**: on by default.
-- **Experimental → citation popups**: off by default.
+## Privacy and network access
 
-## Debugging
+Pinakes itself contacts only these hosts:
 
-All plugin messages start with `[Pinakes]`. To read them, open **Help →
-Debug Output Logging → View Output** and filter on that prefix.
+| Purpose               | Request                                                                                                                                                                                |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| References (primary)  | `GET https://api.semanticscholar.org/graph/v1/paper/{DOI:<doi>\|ARXIV:<id>}/references?fields=title,authors,year,venue,externalIds,abstract,publicationTypes&offset=<n>&limit=500`     |
+| References (fallback) | `GET https://api.openalex.org/works/doi:<doi>?select=id,referenced_works`, then `GET https://api.openalex.org/works?filter=ids.openalex:<ids>&per-page=50&select=…`                    |
+| PDF fallback only     | `GET https://api.crossref.org/works?query.bibliographic=<entry text>&rows=3&select=DOI,title,author,issued,container-title,type,abstract`, one request per entry, at least 0.6 s apart |
+
+- **arXiv papers in OpenAlex.** They are looked up by their DataCite DOI,
+  `10.48550/arxiv.<id>`.
+- **API key.** If you set a Semantic Scholar API key, it is sent only in
+  the `x-api-key` header to `api.semanticscholar.org`.
+- **Import.** Importing runs Zotero's own translators, as _Add Item by
+  Identifier_ does. These contact doi.org, Crossref, DataCite or arXiv,
+  and may download an open-access PDF.
+- **Open.** It opens the DOI or arXiv page in your browser.
+
+Nothing else is sent anywhere. Rate limits (HTTP 429) and server errors
+are retried with exponential backoff, and every retry, fallback and error
+is shown in the section.
+
+## Troubleshooting
+
+- **"No identifier".** Add a DOI or an arXiv ID to the item. You can also
+  use **Read the bibliography from the PDF**.
+- **Frequent rate-limit retries.** Add a free Semantic Scholar API key in
+  the settings.
+- **Debug log.** Enable **Help → Debug Output Logging**, reproduce the
+  problem, then choose **View Output** and look for lines starting with
+  `[Pinakes]`.
 
 ## Development
 
-Requirements: Node.js LTS and Zotero 7 or later.
+You need Node.js (LTS) and Zotero 7 or later.
 
 ```sh
 npm install
-cp .env.example .env    # set the Zotero binary path, profile and data dir
-npm start               # dev build, launches Zotero with the plugin, hot reload
-npm run build           # production build -> .scaffold/build/pinakes.xpi
-npm test                # unit tests (Node, no Zotero needed)
-npm run test:zotero     # integration tests in a throwaway Zotero profile (needs network)
-                        # Zotero's output goes to .scaffold/test/zotero-output.log
+cp .env.example .env   # set the Zotero binary, and a separate profile and data directory
+npm start              # development build with hot reload
+npm run build          # release build: .scaffold/build/pinakes.xpi
+npm test               # unit tests (Node only)
+npm run test:zotero    # integration tests in a throwaway Zotero profile (needs network)
 npm run lint:check
 ```
 
-Source layout:
+The integration tests send Zotero's output to
+`.scaffold/test/zotero-output.log`.
 
-- `src/modules/identifiers.ts`: pure DOI, arXiv and title helpers
-  (unit-tested)
-- `src/modules/sources.ts`: Semantic Scholar and OpenAlex clients, with
-  retry and backoff
-- `src/modules/library.ts`: finds the item's identifier and the "in library"
-  index (one SQL query per library)
-- `src/modules/importer.ts`: import target and translation, plus creation
-  from metadata
-- `src/modules/bibliography.ts`: pure bibliography extraction from PDF text
-  (unit-tested)
-- `src/modules/pdf.ts`: the PDF fallback (PDF text, then Crossref)
-- `src/modules/citations.ts`: pure parser for citation markers such as
-  `[4, 7–9]` (unit-tested)
-- `src/modules/citationPopups.ts`: the reader popups
-- `src/modules/cache.ts`: memory and JSON-file cache
-- `src/modules/section.ts`: the item pane section UI
+Source overview (`src/modules/`):
 
-Built on [zotero-plugin-template](https://github.com/windingwind/zotero-plugin-template)
-and [zotero-plugin-scaffold](https://github.com/northword/zotero-plugin-scaffold).
-The plugin has no runtime dependencies.
+| Module                                           | Responsibility                                                |
+| ------------------------------------------------ | ------------------------------------------------------------- |
+| `section.ts`                                     | Item pane section: rendering, filter, import and batch import |
+| `loader.ts`                                      | Cache → APIs → paper order → PDF fallback pipeline            |
+| `sources.ts`                                     | Semantic Scholar and OpenAlex clients, retry and backoff      |
+| `pdf.ts`, `bibliography.ts`, `ordering.ts`       | PDF bibliography, Crossref resolution, paper order            |
+| `library.ts`, `importer.ts`, `selectionGuard.ts` | Library matching, import target and translation               |
+| `citations.ts`, `citationPopups.ts`              | Citation markers and reader popups                            |
+| `identifiers.ts`, `cache.ts`, `dom.ts`           | Shared helpers                                                |
+
+To release, run `npm run release`. It bumps the version, tags the commit
+and pushes. The GitHub workflow then builds the `.xpi` and publishes it.
+
+## About the name
+
+The _Pinakes_ (Πίνακες, "tables") was the catalogue of the Library of
+Alexandria, compiled by Callimachus of Cyrene in the 3rd century BC and
+often called the first library catalogue. This plugin shows the catalogue
+of the works a paper cites.
 
 ## License
 
-AGPL-3.0-or-later, inherited from the template.
+[AGPL-3.0-or-later](LICENSE). Built on
+[zotero-plugin-template](https://github.com/windingwind/zotero-plugin-template)
+and [zotero-plugin-scaffold](https://github.com/northword/zotero-plugin-scaffold).

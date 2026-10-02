@@ -14,9 +14,10 @@ tsconfig.tsbuildinfo
 .scaffold
 build
 logs
-# Local test papers (never committed)
+
+# Local test papers and diagnostic tests (never committed)
 papers/
-
-
-# Local diagnostic tests (run against papers/)
 test/debug/
+
+# Claude Code local state
+.claude/
