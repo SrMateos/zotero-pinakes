@@ -227,6 +227,9 @@ function titleCase(text: string) {
  * ("3 Method", "3. Method", "III. METHOD") must follow the previous
  * number, which rules out most numbered lines in tables and affiliations.
  * Subsection headings ("3.1 …") are not section headings.
+ *
+ * PDF text often glues the number to the title ("2Method") and splits
+ * small capitals ("1I ntroduction"); both are accepted.
  */
 export function sectionHeading(
   line: string,
@@ -235,14 +238,15 @@ export function sectionHeading(
   const text = line.trim();
   if (text.length > 60 || /[.:,;]$/.test(text)) return undefined;
   const numbered = text.match(
-    /^(\d{1,2}|[IVX]{1,4})\.?\s+(\p{Lu}[\p{L}'’-]*(?:\s+[\p{L}'’&-]+){0,7})$/u,
+    /^(?:(\d{1,2})\.?\s*|([IVX]{1,4})\.?\s+)(\p{Lu}(?: (?=\p{Ll}{2}))?[\p{L}'’-]*(?:\s+[\p{L}'’&-]+){0,11})$/u,
   );
   if (numbered) {
-    const n = /^\d/.test(numbered[1])
+    const n = numbered[1]
       ? Number(numbered[1])
-      : ROMAN.indexOf(numbered[1]) + 1;
+      : ROMAN.indexOf(numbered[2]) + 1;
     if (n === previous + 1) {
-      return { title: titleCase(numbered[2]), number: n };
+      const title = numbered[3].replace(/^(\p{Lu}) (?=\p{Ll})/u, "$1");
+      return { title: titleCase(title), number: n };
     }
     return undefined;
   }

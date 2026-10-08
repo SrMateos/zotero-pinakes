@@ -120,6 +120,17 @@ test("sectionHeading", () => {
     number: 3,
   });
   assert.deepEqual(sectionHeading("Conclusion", 5), { title: "Conclusion" });
+  // As extracted from PDFs: glued numbers and split small capitals.
+  assert.deepEqual(sectionHeading("1I ntroduction", 0), {
+    title: "Introduction",
+    number: 1,
+  });
+  assert.deepEqual(sectionHeading("3E fficient Sampling and Pruning", 2), {
+    title: "Efficient Sampling and Pruning",
+    number: 3,
+  });
+  assert.equal(sectionHeading("2.1Modular Programming", 2), undefined);
+  assert.equal(sectionHeading("1Preferred Networks, Inc.", 0), undefined);
   // Out of sequence, subsections, sentences and table rows are not headings.
   assert.equal(sectionHeading("7 Method", 2), undefined);
   assert.equal(sectionHeading("3.1 Setup", 2), undefined);
