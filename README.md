@@ -26,6 +26,9 @@ sends no telemetry.
   Cancel button are shown while it runs.
 - **Filter.** Narrow the list by title, author, venue, year, DOI or arXiv
   ID.
+- **Citation counts.** Each row shows how often the work has been cited
+  (e.g. "1.2k citations"), and **Most cited** sorts the list by it. The
+  paper's order stays the default. See [Citation counts](#citation-counts).
 - **PDF fallback.** If no API has the references, Pinakes reads the
   bibliography from the PDF and resolves each entry through Crossref.
 - **Citation popups (experimental).** In the reader, hovering a marker such
@@ -80,6 +83,15 @@ entry. The result:
   were hidden;
 - with no usable PDF, the API order is kept and a note explains why.
 
+## Citation counts
+
+The count comes from the source the list was fetched from: Semantic
+Scholar's `citationCount`, OpenAlex's `cited_by_count`, or, for entries
+resolved from the PDF, Crossref's `is-referenced-by-count`. The sources
+count differently, so the same work can show different numbers. Hover a
+badge to see which source it comes from and when it was fetched; press
+**Refresh** to update it. Rows that only exist in the PDF have no count.
+
 ## Where imported items go
 
 | Import target (Settings → Pinakes) | Where the item is created                                                                         |
@@ -107,11 +119,11 @@ so group libraries work. Read-only libraries are refused with an error.
 
 Pinakes itself contacts only these hosts:
 
-| Purpose               | Request                                                                                                                                                                                |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| References (primary)  | `GET https://api.semanticscholar.org/graph/v1/paper/{DOI:<doi>\|ARXIV:<id>}/references?fields=title,authors,year,venue,externalIds,abstract,publicationTypes&offset=<n>&limit=500`     |
-| References (fallback) | `GET https://api.openalex.org/works/doi:<doi>?select=id,referenced_works`, then `GET https://api.openalex.org/works?filter=ids.openalex:<ids>&per-page=50&select=…`                    |
-| PDF fallback only     | `GET https://api.crossref.org/works?query.bibliographic=<entry text>&rows=3&select=DOI,title,author,issued,container-title,type,abstract`, one request per entry, at least 0.6 s apart |
+| Purpose               | Request                                                                                                                                                                                                       |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| References (primary)  | `GET https://api.semanticscholar.org/graph/v1/paper/{DOI:<doi>\|ARXIV:<id>}/references?fields=title,authors,year,venue,externalIds,abstract,publicationTypes,citationCount&offset=<n>&limit=500`              |
+| References (fallback) | `GET https://api.openalex.org/works/doi:<doi>?select=id,referenced_works`, then `GET https://api.openalex.org/works?filter=ids.openalex:<ids>&per-page=50&select=…`                                           |
+| PDF fallback only     | `GET https://api.crossref.org/works?query.bibliographic=<entry text>&rows=3&select=DOI,title,author,issued,container-title,type,abstract,is-referenced-by-count`, one request per entry, at least 0.6 s apart |
 
 - **arXiv papers in OpenAlex.** They are looked up by their DataCite DOI,
   `10.48550/arxiv.<id>`.
@@ -183,15 +195,15 @@ File…**.
 
 Modules in `src/modules/`:
 
-| Module                                           | Responsibility                                                |
-| ------------------------------------------------ | ------------------------------------------------------------- |
-| `section.ts`                                     | Item pane section: rendering, filter, import and batch import |
-| `loader.ts`                                      | Cache → APIs → paper order → PDF fallback pipeline            |
-| `sources.ts`                                     | Semantic Scholar and OpenAlex clients, retry and backoff      |
-| `pdf.ts`, `bibliography.ts`, `ordering.ts`       | PDF bibliography, Crossref resolution, paper order            |
-| `library.ts`, `importer.ts`, `selectionGuard.ts` | Library matching, import target and translation               |
-| `citations.ts`, `citationPopups.ts`              | Citation markers and reader popups                            |
-| `identifiers.ts`, `cache.ts`, `dom.ts`           | Shared helpers                                                |
+| Module                                                   | Responsibility                                                |
+| -------------------------------------------------------- | ------------------------------------------------------------- |
+| `section.ts`                                             | Item pane section: rendering, filter, import and batch import |
+| `loader.ts`                                              | Cache → APIs → paper order → PDF fallback pipeline            |
+| `sources.ts`                                             | Semantic Scholar and OpenAlex clients, retry and backoff      |
+| `pdf.ts`, `bibliography.ts`, `ordering.ts`               | PDF bibliography, Crossref resolution, paper order            |
+| `library.ts`, `importer.ts`, `selectionGuard.ts`         | Library matching, import target and translation               |
+| `citations.ts`, `citationPopups.ts`, `citationCounts.ts` | Citation markers, reader popups, citation count badges        |
+| `identifiers.ts`, `cache.ts`, `dom.ts`                   | Shared helpers                                                |
 
 ### Continuous integration
 

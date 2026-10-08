@@ -6,6 +6,11 @@
 import { config } from "../../package.json";
 import { log } from "../utils/log";
 import { getPref } from "../utils/prefs";
+import {
+  citationBadge,
+  citationTooltip,
+  sortByCitations,
+} from "./citationCounts";
 import { authorYear, button, copyButton, h, referenceUrl } from "./dom";
 import { normalizeForSearch } from "./identifiers";
 import {
@@ -54,8 +59,12 @@ interface SectionState {
   selected: Set<number>;
   lastClicked?: number;
   filter: string[];
+  /** "list": the list's own order (the paper's, if known). */
+  sort: SortOrder;
   batch?: { cancelled: boolean };
 }
+
+type SortOrder = "list" | "citations";
 
 const states = new Map<HTMLElement, SectionState>();
 let paneID: string | false = false;
@@ -76,6 +85,7 @@ export function registerSection() {
         rows: new Map(),
         selected: new Set(),
         filter: [],
+        sort: "list",
       });
     },
     onDestroy: ({ body }) => {
@@ -172,6 +182,7 @@ function showItem(
   state.selected = new Set();
   state.lastClicked = undefined;
   state.filter = [];
+  state.sort = "list";
   state.batch = undefined;
   renderSkeleton(state);
   if (item) void load(state, force, allowPdf);
@@ -281,7 +292,21 @@ function renderSkeleton(state: SectionState) {
       .filter(Boolean);
     applyFilter(state);
   });
-  filterBar.append(filter, h(doc, "span", "pinakes-count"));
+  const sort = h(doc, "select", "pinakes-sort");
+  sort.title = "Order of the list";
+  for (const [value, label] of [
+    ["list", "List order"],
+    ["citations", "Most cited"],
+  ]) {
+    const option = h(doc, "option", undefined, label);
+    option.value = value;
+    sort.append(option);
+  }
+  sort.addEventListener("change", () => {
+    state.sort = sort.value as SortOrder;
+    orderRows(state);
+  });
+  filterBar.append(filter, sort, h(doc, "span", "pinakes-count"));
   filterBar.hidden = true;
 
   const batchBar = h(doc, "div", "pinakes-batchbar");
@@ -379,6 +404,10 @@ function renderList(state: SectionState) {
     source.title = `Fetched ${new Date(list.fetchedAt).toLocaleString()}`;
   }
   const hasRefs = list.references.length > 0;
+  const sort = query<HTMLSelectElement>(state, ".pinakes-sort")!;
+  sort.hidden = !list.references.some((r) => r.citedBy !== undefined);
+  sort.options[0].textContent =
+    list.order === "paper" ? "Paper order" : "List order";
   query(state, ".pinakes-filterbar")!.hidden = !hasRefs;
   query(state, ".pinakes-batchbar")!.hidden = !hasRefs;
   // Notes (fallbacks, hidden entries, ordering) stay visible.
@@ -410,8 +439,21 @@ function isShown(state: SectionState, ref: Reference) {
   return state.filter.every((token) => text.includes(token));
 }
 
+/** The list's references in the chosen order. */
+function sortedRefs(state: SectionState) {
+  const refs = state.list?.references ?? [];
+  return state.sort === "citations" ? sortByCitations(refs) : refs;
+}
+
+/** Shown references, in the order they are displayed. */
 function shownRefs(state: SectionState) {
-  return (state.list?.references ?? []).filter((r) => isShown(state, r));
+  return sortedRefs(state).filter((r) => isShown(state, r));
+}
+
+/** Put the rows in the chosen order. */
+function orderRows(state: SectionState) {
+  const rows = sortedRefs(state).map((ref) => state.rows.get(ref.index)!);
+  query(state, ".pinakes-list")?.append(...rows);
 }
 
 function importableShown(state: SectionState) {
@@ -482,6 +524,14 @@ function renderRow(state: SectionState, ref: Reference) {
     h(doc, "span", "pinakes-num", ref.label ?? `${ref.index}`),
     text,
   );
+  if (ref.citedBy !== undefined) {
+    const cites = h(doc, "span", "pinakes-cites", citationBadge(ref.citedBy));
+    cites.title = citationTooltip(
+      ref,
+      new Date(state.list!.fetchedAt).toLocaleString(),
+    );
+    main.append(cites);
+  }
   main.addEventListener("click", () => li.classList.toggle("pinakes-expanded"));
 
   const abstract = ref.unresolved

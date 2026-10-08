@@ -217,6 +217,9 @@ describe("fetchReferences", function () {
     );
     assert.isAbove(list.references.length, 10);
     assert.isOk(list.references[0].title);
+    const counted = list.references.filter((r) => r.citedBy !== undefined);
+    assert.isAbove(counted.length, 10, "references carry citation counts");
+    assert.equal(counted[0].citedBySource, list.source);
   });
 
   it("fetches references for an arXiv-only paper", async function () {
@@ -306,6 +309,30 @@ describe("item pane section", function () {
       Array.from(first.querySelectorAll("button")) as Element[]
     ).map((b) => b.textContent);
     assert.includeMembers(labels, ["Copy DOI", "Open"]);
+
+    // Citation badges, and "Most cited" puts the most cited row first.
+    assert.match(
+      section().querySelector(".pinakes-cites")?.textContent ?? "",
+      /citations?$/,
+    );
+    const sort = $(".pinakes-sort") as HTMLSelectElement;
+    assert.isFalse(sort.hidden);
+    const counts = () =>
+      rows().map((r) => {
+        const title = r.querySelector(".pinakes-cites")?.getAttribute("title");
+        const m = title?.match(/Cited ([\d,]+) times|Cited once/);
+        return m ? (m[1] ? Number(m[1].replace(/,/g, "")) : 1) : -1;
+      });
+    sort.value = "citations";
+    sort.dispatchEvent(new win.Event("change"));
+    const sorted = counts();
+    assert.deepEqual(
+      sorted,
+      [...sorted].sort((x, y) => y - x),
+    );
+    sort.value = "list";
+    sort.dispatchEvent(new win.Event("change"));
+    assert.equal(rows()[0], first);
     // Keep assertion messages ASCII: the scaffold reporter hangs on others.
     const label = $(".pinakes-target")?.textContent;
     assert.isTrue(
@@ -406,6 +433,12 @@ describe("PDF fallback", function () {
     assert.match(list.references[0].raw!, /Hyperopt/);
     const resolved = list.references.filter((r) => r.doi && !r.unresolved);
     assert.isAtLeast(resolved.length, 5, "some entries resolved via Crossref");
+    assert.isTrue(
+      resolved.some(
+        (r) => r.citedBySource === "crossref" && r.citedBy !== undefined,
+      ),
+      "Crossref citation counts",
+    );
     assert.isTrue(
       /Extracted \d+ references from the PDF/.test(notes.join(" ")),
     );

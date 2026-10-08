@@ -7,7 +7,8 @@ import { describe } from "./sources";
 import type { PaperId, ReferenceList } from "./types";
 
 // 2: lists are stored in the paper's order (see ordering.ts).
-const CACHE_VERSION = 2;
+// 3: references carry citation counts.
+const CACHE_VERSION = 3;
 
 interface CacheFile {
   version: number;

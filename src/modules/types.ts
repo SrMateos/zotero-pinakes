@@ -1,6 +1,9 @@
 /** Where a reference list came from. */
 export type SourceName = "semanticscholar" | "openalex" | "pdf";
 
+/** Where a citation count came from. Each counts differently. */
+export type CountSource = "semanticscholar" | "openalex" | "crossref";
+
 /** Identifier of the citing paper, used to query the APIs. */
 export type PaperId =
   { kind: "DOI"; value: string } | { kind: "arXiv"; value: string };
@@ -20,6 +23,9 @@ export interface Reference {
   arxiv?: string;
   abstract?: string;
   kind: RefKind;
+  /** How often this work has been cited, according to `citedBySource`. */
+  citedBy?: number;
+  citedBySource?: CountSource;
   /** PDF fallback: the entry text as printed in the bibliography. */
   raw?: string;
   /** PDF fallback: the label printed in the paper ("23" for "[23]"). */

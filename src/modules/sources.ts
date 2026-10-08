@@ -12,6 +12,7 @@ import {
   parseArxivId,
 } from "./identifiers";
 import type {
+  CountSource,
   PaperId,
   RefKind,
   Reference,
@@ -23,7 +24,7 @@ const S2_BASE = "https://api.semanticscholar.org/graph/v1";
 const OPENALEX_BASE = "https://api.openalex.org";
 
 const S2_FIELDS =
-  "title,authors,year,venue,externalIds,abstract,publicationTypes";
+  "title,authors,year,venue,externalIds,abstract,publicationTypes,citationCount";
 const S2_PAGE_SIZE = 500;
 const MAX_REFERENCES = 3000;
 const OPENALEX_BATCH = 50;
@@ -97,6 +98,14 @@ export async function fetchReferences(
   throw new SourceError(notes.join("\n"));
 }
 
+/** The citation fields of a Reference, empty when there is no count. */
+export function citedBy(
+  value: number | undefined,
+  source: CountSource,
+): Pick<Reference, "citedBy" | "citedBySource"> {
+  return value === undefined ? {} : { citedBy: value, citedBySource: source };
+}
+
 export function describe(paperId: PaperId | undefined) {
   return paperId ? `${paperId.kind}:${paperId.value}` : "(no identifier)";
 }
@@ -113,6 +122,7 @@ interface S2Paper {
   abstract?: string | null;
   publicationTypes?: string[] | null;
   externalIds?: { DOI?: string; ArXiv?: string } | null;
+  citationCount?: number | null;
 }
 
 interface S2ReferencesPage {
@@ -136,6 +146,14 @@ interface OpenAlexWork {
   }>;
   abstract_inverted_index?: Record<string, number[]> | null;
   referenced_works?: string[];
+  cited_by_count?: number | null;
+}
+
+/** A citation count, if the API returned a usable one. */
+export function count(value: unknown) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : undefined;
 }
 
 /** Non-empty strings only. */
@@ -313,6 +331,7 @@ function fromSemanticScholar(
     arxiv,
     abstract: paper.abstract || undefined,
     kind,
+    ...citedBy(count(paper.citationCount), "semanticscholar"),
   };
 }
 
@@ -353,7 +372,7 @@ async function fetchOpenAlex(
     const url =
       `${OPENALEX_BASE}/works?filter=ids.openalex:${batch.join("|")}` +
       `&per-page=${OPENALEX_BATCH}` +
-      `&select=id,doi,display_name,publication_year,authorships,primary_location,locations,type,abstract_inverted_index`;
+      `&select=id,doi,display_name,publication_year,authorships,primary_location,locations,type,abstract_inverted_index,cited_by_count`;
     const page = await getJSON<{ results?: OpenAlexWork[] }>(
       url,
       label,
@@ -407,5 +426,6 @@ function fromOpenAlex(
     arxiv,
     abstract: abstractFromInvertedIndex(work.abstract_inverted_index),
     kind,
+    ...citedBy(count(work.cited_by_count), "openalex"),
   };
 }

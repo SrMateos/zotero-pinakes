@@ -12,6 +12,7 @@ import { log } from "../utils/log";
 import { getPref } from "../utils/prefs";
 import { titleInEntry } from "./bibliography";
 import { getCached } from "./cache";
+import { citationBadge } from "./citationCounts";
 import { authorYear, button, h, referenceUrl } from "./dom";
 import { markerAt } from "./citations";
 import {
@@ -427,7 +428,11 @@ async function renderPopup(
       );
     } else {
       box.append(h(doc, "div", "pk-title", `[${n}] ${ref.title}`));
-      const meta = [authorYear(ref), ref.venue].filter(Boolean).join(" · ");
+      const cites =
+        ref.citedBy !== undefined ? citationBadge(ref.citedBy) : undefined;
+      const meta = [authorYear(ref), ref.venue, cites]
+        .filter(Boolean)
+        .join(" · ");
       if (meta) box.append(h(doc, "div", "pk-meta", meta));
       if (ref.abstract) {
         const text =

@@ -180,3 +180,20 @@
 .pinakes-unresolved .pinakes-row-main {
   cursor: default;
 }
+
+.pinakes-cites {
+  flex: 0 0 auto;
+  margin-inline-start: auto;
+  align-self: flex-start;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 0.85em;
+  white-space: nowrap;
+  color: var(--fill-secondary, #666);
+  background: var(--fill-quinary, rgba(0, 0, 0, 0.05));
+  font-variant-numeric: tabular-nums;
+}
+
+.pinakes-sort[hidden] {
+  display: none;
+}

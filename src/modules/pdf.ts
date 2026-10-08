@@ -13,6 +13,8 @@ import {
 import { normalizeDOI } from "./identifiers";
 import { arxivInText, entryReference, orderByPaper } from "./ordering";
 import {
+  citedBy,
+  count,
   getJSON,
   SourceError,
   sourceLabel,
@@ -135,6 +137,7 @@ interface CrossrefWork {
   "container-title"?: string[];
   type?: string;
   abstract?: string;
+  "is-referenced-by-count"?: number;
 }
 
 /** Query Crossref for one entry; undefined if nothing matches its title. */
@@ -146,7 +149,7 @@ async function resolveEntry(
   const query = encodeURIComponent(entry.text.slice(0, MAX_QUERY_LENGTH));
   const url =
     `${CROSSREF_BASE}/works?query.bibliographic=${query}&rows=3` +
-    `&select=DOI,title,author,issued,container-title,type,abstract`;
+    `&select=DOI,title,author,issued,container-title,type,abstract,is-referenced-by-count`;
   const data = await getJSON<{ message?: { items?: CrossrefWork[] } }>(
     url,
     "Crossref",
@@ -175,6 +178,7 @@ async function resolveEntry(
             .trim()
         : undefined,
       kind: CROSSREF_KIND[work.type ?? ""] ?? "other",
+      ...citedBy(count(work["is-referenced-by-count"]), "crossref"),
     };
   }
   return undefined;
