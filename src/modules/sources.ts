@@ -23,7 +23,7 @@ const S2_BASE = "https://api.semanticscholar.org/graph/v1";
 const OPENALEX_BASE = "https://api.openalex.org";
 
 const S2_FIELDS =
-  "title,authors,year,venue,externalIds,abstract,publicationTypes";
+  "title,authors,year,venue,externalIds,abstract,publicationTypes,isInfluential,intents";
 const S2_PAGE_SIZE = 500;
 const MAX_REFERENCES = 3000;
 const OPENALEX_BATCH = 50;
@@ -65,7 +65,7 @@ export async function fetchReferences(
   onStatus: StatusCallback,
 ): Promise<ReferenceList> {
   const notes: string[] = [];
-  const attempts: Array<[SourceName, () => Promise<Reference[]>]> = [
+  const attempts: Array<[SourceName, () => Promise<Fetched>]> = [
     ["semanticscholar", () => fetchSemanticScholar(paperId, onStatus)],
     ["openalex", () => fetchOpenAlex(paperId, onStatus)],
   ];
@@ -74,7 +74,7 @@ export async function fetchReferences(
     const label = SOURCE_LABEL[source];
     onStatus(`Fetching references from ${label}…`);
     try {
-      const references = await run();
+      const { references, citingAuthorIds } = await run();
       if (references.length) {
         log(
           `${label}: ${references.length} references for ${describe(paperId)}`,
@@ -83,6 +83,7 @@ export async function fetchReferences(
           paperId,
           source,
           fetchedAt: new Date().toISOString(),
+          citingAuthorIds,
           references,
           notes,
         };
@@ -97,6 +98,13 @@ export async function fetchReferences(
   throw new SourceError(notes.join("\n"));
 }
 
+/** What a source returns for the citing paper. */
+interface Fetched {
+  references: Reference[];
+  /** The citing paper's author IDs, if the source returned them. */
+  citingAuthorIds?: string[];
+}
+
 export function describe(paperId: PaperId | undefined) {
   return paperId ? `${paperId.kind}:${paperId.value}` : "(no identifier)";
 }
@@ -107,7 +115,7 @@ export function describe(paperId: PaperId | undefined) {
 
 interface S2Paper {
   title?: string | null;
-  authors?: Array<{ name?: string | null }> | null;
+  authors?: Array<{ authorId?: string | null; name?: string | null }> | null;
   year?: number | null;
   venue?: string | null;
   abstract?: string | null;
@@ -115,9 +123,15 @@ interface S2Paper {
   externalIds?: { DOI?: string; ArXiv?: string } | null;
 }
 
+interface S2Reference {
+  citedPaper?: S2Paper | null;
+  isInfluential?: boolean | null;
+  intents?: string[] | null;
+}
+
 interface S2ReferencesPage {
   next?: number;
-  data?: Array<{ citedPaper?: S2Paper | null }>;
+  data?: Array<S2Reference>;
 }
 
 interface OpenAlexWork {
@@ -126,7 +140,9 @@ interface OpenAlexWork {
   display_name?: string | null;
   publication_year?: number | null;
   type?: string | null;
-  authorships?: Array<{ author?: { display_name?: string | null } }>;
+  authorships?: Array<{
+    author?: { id?: string | null; display_name?: string | null };
+  }>;
   primary_location?: {
     source?: { display_name?: string | null; type?: string | null } | null;
   } | null;
@@ -141,6 +157,24 @@ interface OpenAlexWork {
 /** Non-empty strings only. */
 function names(values: Array<string | null | undefined>) {
   return values.filter((n): n is string => typeof n === "string" && !!n);
+}
+
+/**
+ * Authors with a name, as parallel `authors` and `authorIds` arrays
+ * (`authorIds` is left out when no author has an ID).
+ */
+function authorsWithIds(
+  list: Array<{ id?: string | null; name?: string | null }>,
+): Pick<Reference, "authors" | "authorIds"> {
+  const named = list.filter((a) => typeof a.name === "string" && !!a.name);
+  const authors = named.map((a) => a.name as string);
+  const authorIds = named.map((a) => a.id || undefined);
+  return authorIds.some(Boolean) ? { authors, authorIds } : { authors };
+}
+
+/** The last path segment of an OpenAlex ID URL ("A5023888391"). */
+function openAlexId(url: string | null | undefined) {
+  return url ? url.split("/").pop() || undefined : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -259,7 +293,7 @@ function s2PaperPath(paperId: PaperId) {
 async function fetchSemanticScholar(
   paperId: PaperId,
   onStatus: StatusCallback,
-): Promise<Reference[]> {
+): Promise<Fetched> {
   const label = SOURCE_LABEL.semanticscholar;
   const key = (getPref("s2ApiKey") || "").trim();
   const headers: Record<string, string> = key ? { "x-api-key": key } : {};
@@ -278,19 +312,36 @@ async function fetchSemanticScholar(
       );
     }
     for (const entry of page.data ?? []) {
-      const ref = fromSemanticScholar(entry?.citedPaper, references.length + 1);
+      const ref = fromSemanticScholar(entry, references.length + 1);
       if (ref) references.push(ref);
     }
     if (typeof page.next !== "number" || page.next <= offset) break;
     offset = page.next;
   }
-  return references;
+  if (!references.length) return { references };
+
+  // The citing paper's own authors, to mark self-citations. Not essential:
+  // the list is still shown if this request fails.
+  let citingAuthorIds: string[] | undefined;
+  try {
+    const paper = await getJSON<S2Paper>(
+      `${S2_BASE}/paper/${s2PaperPath(paperId)}?fields=authors`,
+      label,
+      onStatus,
+      headers,
+    );
+    citingAuthorIds = names((paper?.authors ?? []).map((a) => a?.authorId));
+  } catch (e) {
+    log(`${label}: could not fetch the authors of ${describe(paperId)}`, e);
+  }
+  return { references, citingAuthorIds };
 }
 
 function fromSemanticScholar(
-  paper: S2Paper | null | undefined,
+  entry: S2Reference | null | undefined,
   index: number,
 ): Reference | null {
+  const paper = entry?.citedPaper;
   if (!paper || !paper.title) return null;
   const ids = paper.externalIds ?? {};
   const doi = normalizeDOI(ids.DOI);
@@ -303,16 +354,21 @@ function fromSemanticScholar(
   else if (types.includes("JournalArticle")) kind = "journal";
   if ((venue && /arxiv/i.test(venue)) || (arxiv && !doi)) kind = "preprint";
 
+  const intents = names(entry.intents ?? []);
   return {
     index,
     title: paper.title,
-    authors: names((paper.authors ?? []).map((a) => a?.name)),
+    ...authorsWithIds(
+      (paper.authors ?? []).map((a) => ({ id: a?.authorId, name: a?.name })),
+    ),
     year: typeof paper.year === "number" ? paper.year : undefined,
     venue,
     doi,
     arxiv,
     abstract: paper.abstract || undefined,
     kind,
+    ...(entry.isInfluential ? { influential: true } : {}),
+    ...(intents.length ? { intents } : {}),
   };
 }
 
@@ -330,10 +386,10 @@ function openAlexWorkPath(paperId: PaperId) {
 async function fetchOpenAlex(
   paperId: PaperId,
   onStatus: StatusCallback,
-): Promise<Reference[]> {
+): Promise<Fetched> {
   const label = SOURCE_LABEL.openalex;
   const work = await getJSON<OpenAlexWork>(
-    `${OPENALEX_BASE}/${openAlexWorkPath(paperId)}?select=id,referenced_works`,
+    `${OPENALEX_BASE}/${openAlexWorkPath(paperId)}?select=id,referenced_works,authorships`,
     label,
     onStatus,
   );
@@ -369,7 +425,10 @@ async function fetchOpenAlex(
     const ref = fromOpenAlex(byId.get(id), references.length + 1);
     if (ref) references.push(ref);
   }
-  return references;
+  const citingAuthorIds = names(
+    (work.authorships ?? []).map((a) => openAlexId(a?.author?.id)),
+  );
+  return { references, citingAuthorIds };
 }
 
 function fromOpenAlex(
@@ -395,8 +454,11 @@ function fromOpenAlex(
   return {
     index,
     title: work.display_name,
-    authors: names(
-      (work.authorships ?? []).map((a) => a?.author?.display_name),
+    ...authorsWithIds(
+      (work.authorships ?? []).map((a) => ({
+        id: openAlexId(a?.author?.id),
+        name: a?.author?.display_name,
+      })),
     ),
     year:
       typeof work.publication_year === "number"

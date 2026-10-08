@@ -7,7 +7,12 @@ import { assert } from "chai";
 import { config } from "../../package.json";
 import { importReference, resolveTarget } from "../../src/modules/importer";
 import { findInLibrary, getPaperId } from "../../src/modules/library";
-import { applyPaperOrder, referencesFromPdf } from "../../src/modules/pdf";
+import { inTextCitations } from "../../src/modules/insights";
+import {
+  applyPaperOrder,
+  readFullText,
+  referencesFromPdf,
+} from "../../src/modules/pdf";
 import { fetchReferences } from "../../src/modules/sources";
 import type { Reference } from "../../src/modules/types";
 
@@ -217,6 +222,9 @@ describe("fetchReferences", function () {
     );
     assert.isAbove(list.references.length, 10);
     assert.isOk(list.references[0].title);
+    // Insights: author IDs, and the citing paper's own authors.
+    assert.isNotEmpty(list.citingAuthorIds ?? []);
+    assert.isTrue(list.references.some((r) => r.authorIds?.some(Boolean)));
   });
 
   it("fetches references for an arXiv-only paper", async function () {
@@ -306,6 +314,23 @@ describe("item pane section", function () {
       Array.from(first.querySelectorAll("button")) as Element[]
     ).map((b) => b.textContent);
     assert.includeMembers(labels, ["Copy DOI", "Open"]);
+
+    // Insights: a summary, and clicking an author filters the list.
+    const insights = $(".pinakes-insights") as HTMLDetailsElement;
+    assert.isFalse(insights.hidden);
+    insights.open = true;
+    assert.match(insights.textContent ?? "", /already in your library/);
+    const author = insights.querySelector(
+      ".pinakes-authors .pinakes-chip",
+    ) as HTMLElement | null;
+    if (author) {
+      author.click();
+      assert.isBelow(shownRows().length, rows().length);
+      assert.isFalse($(".pinakes-facet")!.hidden);
+      ($(".pinakes-facet button") as HTMLElement).click();
+      assert.equal(shownRows().length, rows().length);
+    }
+    insights.open = false;
     // Keep assertion messages ASCII: the scaffold reporter hangs on others.
     const label = $(".pinakes-target")?.textContent;
     assert.isTrue(
@@ -409,6 +434,14 @@ describe("PDF fallback", function () {
     assert.isTrue(
       /Extracted \d+ references from the PDF/.test(notes.join(" ")),
     );
+  });
+
+  it("counts in-text citations per number and section", async function () {
+    const { text } = await readFullText(item);
+    const counts = inTextCitations(text);
+    assert.isAtLeast(counts.size, 15, "most references are cited in the text");
+    const sections = new Set([...counts.values()].flatMap((c) => c.sections));
+    assert.isTrue(sections.has("Introduction"), [...sections].join("|"));
   });
 
   it("puts an API list in the paper's order", async function () {

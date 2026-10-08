@@ -46,31 +46,47 @@ function furniture(lines: string[]) {
 }
 
 /**
+ * The line of the last "References"-like heading. Some PDFs glue the
+ * heading to the first entry ("References [1] …"); then `firstEntry` is
+ * the rest of that line.
+ */
+function findHeading(
+  lines: string[],
+): { line: number; firstEntry?: string } | undefined {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (HEADING.test(lines[i])) return { line: i };
+  }
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = lines[i].match(/^\s*(?:references|bibliography)\s+(\[1\].*)$/i);
+    if (m) return { line: i, firstEntry: m[1] };
+  }
+  return undefined;
+}
+
+/**
+ * The lines of the document before its bibliography (the whole text if no
+ * bibliography heading is found).
+ */
+export function bodyLines(text: string) {
+  const lines = text.split(/\r?\n/);
+  const found = findHeading(lines);
+  return found ? lines.slice(0, found.line) : lines;
+}
+
+/**
  * Return the lines of the bibliography: everything after the last
  * "References"-like heading, up to an appendix-like heading, without page
  * furniture. Returns undefined if no heading is found.
  */
 function findBibliography(text: string): string[] | undefined {
   const lines = text.split(/\r?\n/);
-  let start = -1;
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (HEADING.test(lines[i])) {
-      start = i + 1;
-      break;
-    }
+  const found = findHeading(lines);
+  if (!found) return undefined;
+  let start = found.line + 1;
+  if (found.firstEntry !== undefined) {
+    lines[found.line] = found.firstEntry;
+    start = found.line;
   }
-  if (start < 0) {
-    // Some PDFs glue the heading to the first entry: "References [1] …".
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const m = lines[i].match(/^\s*(?:references|bibliography)\s+(\[1\].*)$/i);
-      if (m) {
-        lines[i] = m[1];
-        start = i;
-        break;
-      }
-    }
-  }
-  if (start < 0) return undefined;
 
   const isFurniture = furniture(lines);
   const result: string[] = [];

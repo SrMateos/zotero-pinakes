@@ -14,12 +14,21 @@ export interface Reference {
   index: number;
   title: string;
   authors: string[];
+  /**
+   * The source's author IDs, parallel to `authors` (Semantic Scholar
+   * authorId or OpenAlex author ID; undefined where it has none).
+   */
+  authorIds?: Array<string | undefined>;
   year?: number;
   venue?: string;
   doi?: string;
   arxiv?: string;
   abstract?: string;
   kind: RefKind;
+  /** Semantic Scholar: the citing paper cites this work influentially. */
+  influential?: boolean;
+  /** Semantic Scholar: why it is cited ("background", "methodology", "result"). */
+  intents?: string[];
   /** PDF fallback: the entry text as printed in the bibliography. */
   raw?: string;
   /** PDF fallback: the label printed in the paper ("23" for "[23]"). */
@@ -39,6 +48,8 @@ export interface ReferenceList {
    */
   order?: "paper" | "source";
   fetchedAt: string;
+  /** Author IDs of the citing paper in the source, to spot self-citations. */
+  citingAuthorIds?: string[];
   references: Reference[];
   /** Non-fatal problems, e.g. "Semantic Scholar: rate limited, used OpenAlex". */
   notes: string[];

@@ -37,22 +37,26 @@ async function findPdf(item: Zotero.Item) {
   return undefined;
 }
 
-/** Bibliography entries of the item's PDF, or a SourceError explaining why not. */
-export async function readBibliography(item: Zotero.Item) {
+/** The full text of the item's PDF, or a SourceError explaining why not. */
+export async function readFullText(item: Zotero.Item) {
   const pdf = await findPdf(item);
   if (!pdf) throw new SourceError("This item has no PDF attachment.");
   if (!(await pdf.fileExists())) {
     throw new SourceError("The PDF file is not available locally.");
   }
-  let text: string;
   try {
     const result = await Zotero.PDFWorker.getFullText(pdf.id, null, true);
-    text = result?.text ?? "";
+    return { pdf, text: result?.text ?? "" };
   } catch (e) {
     throw new SourceError(
       `Could not read the PDF text: ${e instanceof Error ? e.message : e}`,
     );
   }
+}
+
+/** Bibliography entries of the item's PDF, or a SourceError explaining why not. */
+export async function readBibliography(item: Zotero.Item) {
+  const { pdf, text } = await readFullText(item);
   const bibliography = extractBibliography(text);
   if (!bibliography) {
     throw new SourceError(

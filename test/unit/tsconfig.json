@@ -15,6 +15,7 @@
     "identifiers.test.ts",
     "bibliography.test.ts",
     "citations.test.ts",
-    "ordering.test.ts"
+    "ordering.test.ts",
+    "insights.test.ts"
   ]
 }

@@ -8,6 +8,7 @@ import { log } from "../utils/log";
 import { getPref } from "../utils/prefs";
 import { authorYear, button, copyButton, h, referenceUrl } from "./dom";
 import { normalizeForSearch } from "./identifiers";
+import { intentLabel } from "./insights";
 import {
   checkTargetEditable,
   importReference,
@@ -17,6 +18,12 @@ import {
   type ImportTarget,
   type TargetMode,
 } from "./importer";
+import {
+  createInsightsPanel,
+  renderInsights,
+  type Facet,
+  type InTextResult,
+} from "./insightsPanel";
 import { findInLibrary } from "./library";
 import { loadReferenceList } from "./loader";
 import { ImportSelectionGuard } from "./selectionGuard";
@@ -54,6 +61,10 @@ interface SectionState {
   selected: Set<number>;
   lastClicked?: number;
   filter: string[];
+  /** A filter set from the Insights panel (author, venue, tag…). */
+  facet?: Facet;
+  /** In-text citation counts, read from the PDF when Insights is opened. */
+  inText?: InTextResult;
   batch?: { cancelled: boolean };
 }
 
@@ -172,6 +183,8 @@ function showItem(
   state.selected = new Set();
   state.lastClicked = undefined;
   state.filter = [];
+  state.facet = undefined;
+  state.inText = undefined;
   state.batch = undefined;
   renderSkeleton(state);
   if (item) void load(state, force, allowPdf);
@@ -230,6 +243,7 @@ async function markInLibrary(state: SectionState, token: number) {
     state.matches = matches;
     for (const index of matches.keys()) state.selected.delete(index);
     updateAllRows(state);
+    updateInsights(state);
   } catch (e) {
     log("Could not check which references are in the library", e);
   }
@@ -281,7 +295,9 @@ function renderSkeleton(state: SectionState) {
       .filter(Boolean);
     applyFilter(state);
   });
-  filterBar.append(filter, h(doc, "span", "pinakes-count"));
+  const facet = h(doc, "span", "pinakes-facet");
+  facet.hidden = true;
+  filterBar.append(filter, facet, h(doc, "span", "pinakes-count"));
   filterBar.hidden = true;
 
   const batchBar = h(doc, "div", "pinakes-batchbar");
@@ -332,6 +348,7 @@ function renderSkeleton(state: SectionState) {
     batchBar,
     progress,
     h(doc, "div", "pinakes-status"),
+    createInsightsPanel(doc),
     h(doc, "ol", "pinakes-list"),
   );
 
@@ -386,6 +403,46 @@ function renderList(state: SectionState) {
   else setStatus(state, "none");
   state.setSummary?.(`${list.references.length} references`);
   applyFilter(state);
+  updateInsights(state);
+}
+
+function updateInsights(state: SectionState) {
+  const details = query<HTMLDetailsElement>(state, ".pinakes-insights");
+  if (!details || !state.item || !state.list) return;
+  const token = state.token;
+  renderInsights(details, {
+    doc: state.doc,
+    item: state.item,
+    list: state.list,
+    matches: state.matches,
+    get inText() {
+      return state.inText;
+    },
+    set inText(result) {
+      state.inText = result;
+    },
+    setFacet: (facet) => setFacet(state, facet),
+    isStale: () => state.token !== token,
+  });
+}
+
+/** Filter the list by a facet from the Insights panel (undefined clears it). */
+function setFacet(state: SectionState, facet: Facet | undefined) {
+  state.facet = facet;
+  const chip = query(state, ".pinakes-facet");
+  if (chip) {
+    chip.hidden = !facet;
+    chip.replaceChildren();
+    if (facet) {
+      const clear = button(state.doc, "×", () => setFacet(state, undefined));
+      clear.title = "Show all references";
+      chip.append(h(state.doc, "span", "", facet.label), clear);
+    }
+  }
+  applyFilter(state);
+  if (facet) {
+    query(state, ".pinakes-list")?.scrollIntoView({ block: "nearest" });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -406,6 +463,7 @@ function haystack(ref: Reference) {
 }
 
 function isShown(state: SectionState, ref: Reference) {
+  if (state.facet && !state.facet.test(ref)) return false;
   const text = state.filter.length ? haystack(ref) : "";
   return state.filter.every((token) => text.includes(token));
 }
@@ -426,9 +484,10 @@ function applyFilter(state: SectionState) {
     state.rows.get(ref.index)!.hidden = !visible;
     if (visible) shown++;
   }
-  query(state, ".pinakes-count")!.textContent = state.filter.length
-    ? `${shown} of ${state.list.references.length}`
-    : "";
+  query(state, ".pinakes-count")!.textContent =
+    state.filter.length || state.facet
+      ? `${shown} of ${state.list.references.length}`
+      : "";
   updateBatchBar(state);
 }
 
@@ -472,6 +531,17 @@ function renderRow(state: SectionState, ref: Reference) {
         [who, ref.venue].filter(Boolean).join(" · "),
       ),
     );
+    const tags = [
+      ...(ref.influential ? ["Influential"] : []),
+      ...(ref.intents ?? []).map(intentLabel),
+    ];
+    if (tags.length) {
+      const div = h(doc, "div", "pinakes-tags");
+      div.append(...tags.map((tag) => h(doc, "span", "pinakes-tag", tag)));
+      div.title =
+        "How this paper cites the reference, according to Semantic Scholar.";
+      text.append(div);
+    }
   }
 
   const main = h(doc, "div", "pinakes-row-main");
@@ -682,7 +752,7 @@ function updateBatchBar(state: SectionState) {
   }
   const importAll = query<HTMLButtonElement>(state, ".pinakes-import-all");
   if (importAll) {
-    const shown = state.filter.length ? "shown " : "";
+    const shown = state.filter.length || state.facet ? "shown " : "";
     importAll.textContent = `Import all ${shown}not in library (${candidates.length})`;
     importAll.disabled = busy || !candidates.length;
   }
