@@ -8,6 +8,15 @@ import { config } from "../../package.json";
 import { importReference, resolveTarget } from "../../src/modules/importer";
 import { findInLibrary, getPaperId } from "../../src/modules/library";
 import { applyPaperOrder, referencesFromPdf } from "../../src/modules/pdf";
+import { openReport } from "../../src/modules/publishedReport";
+import {
+  addAsRelated,
+  addNoteAndTag,
+  itemsToCheck,
+  PUBLISHED_TAG,
+  searchPublishedVersion,
+  updateToPublished,
+} from "../../src/modules/publishedVersions";
 import { fetchReferences } from "../../src/modules/sources";
 import type { Reference } from "../../src/modules/types";
 
@@ -525,6 +534,167 @@ describe("PDF fallback", function () {
       );
     } finally {
       Zotero.Prefs.set(pref, false, true);
+    }
+  });
+});
+
+describe("published versions in DBLP", function () {
+  let collection: Zotero.Collection;
+
+  /** The arXiv preprint of Optuna, as "Add Item by Identifier" creates it. */
+  async function optunaPreprint() {
+    const item = new Zotero.Item("preprint");
+    item.setField(
+      "title",
+      "Optuna: A Next-generation Hyperparameter Optimization Framework",
+    );
+    item.setField("date", "2019-07-25");
+    item.setField("repository", "arXiv");
+    item.setField("archiveID", "arXiv:1907.10902");
+    item.setField("DOI", "10.48550/arXiv.1907.10902");
+    item.setField("url", "http://arxiv.org/abs/1907.10902");
+    item.setCreators([
+      { firstName: "Takuya", lastName: "Akiba", creatorType: "author" },
+      { firstName: "Shotaro", lastName: "Sano", creatorType: "author" },
+      { firstName: "Toshihiko", lastName: "Yanase", creatorType: "author" },
+    ]);
+    item.setCollections([collection.id]);
+    await item.saveTx();
+    return item;
+  }
+
+  before(async function () {
+    collection = await createCollection(
+      Zotero.Libraries.userLibraryID,
+      "Published versions",
+    );
+  });
+
+  it("adds an entry to the collection context menu", function () {
+    const doc = Zotero.getMainWindow().document;
+    const item = doc.getElementById(`${config.addonRef}-find-published`);
+    assert.isOk(item);
+    assert.equal(item!.parentElement?.id, "zotero-collectionmenu");
+  });
+
+  it("selects preprints and items without a venue", async function () {
+    const preprint = await optunaPreprint();
+    const published = new Zotero.Item("journalArticle");
+    published.setField(
+      "title",
+      "Random Search for Hyper-Parameter Optimization",
+    );
+    published.setField("publicationTitle", "JMLR");
+    published.setField("DOI", "10.5555/2188385.2188395");
+    published.setCollections([collection.id]);
+    await published.saveTx();
+    const ids = itemsToCheck(collection, "preprints").map((i) => i.id);
+    assert.include(ids, preprint.id);
+    assert.notInclude(ids, published.id);
+    assert.include(
+      itemsToCheck(collection, "all").map((i) => i.id),
+      published.id,
+    );
+  });
+
+  it("finds the KDD version of the Optuna preprint", async function () {
+    const outcome = await searchPublishedVersion(
+      await optunaPreprint(),
+      () => {},
+    );
+    assert.equal(outcome.kind, "found");
+    if (outcome.kind !== "found") return;
+    assert.equal(outcome.match.key, "conf/kdd/AkibaSYOK19");
+    assert.equal(outcome.match.doi, "10.1145/3292500.3330701");
+  });
+
+  it("adds a note and a tag", async function () {
+    const item = await optunaPreprint();
+    const outcome = await searchPublishedVersion(item, () => {});
+    assert.equal(outcome.kind, "found");
+    if (outcome.kind !== "found") return;
+    await addNoteAndTag(item, outcome.match);
+    await addNoteAndTag(item, outcome.match);
+    assert.isTrue(item.hasTag(PUBLISHED_TAG));
+    assert.lengthOf(item.getNotes(), 1, "applied twice, one note");
+    assert.include(
+      (Zotero.Items.get(item.getNotes()[0]) as Zotero.Item).getNote(),
+      "KDD",
+    );
+  });
+
+  it("imports the published version as a related item", async function () {
+    const item = await optunaPreprint();
+    const outcome = await searchPublishedVersion(item, () => {});
+    if (outcome.kind !== "found") throw new Error(outcome.kind);
+    const published = await addAsRelated(item, outcome.match, collection.id);
+    assert.notEqual(published.id, item.id);
+    assert.equal(published.getField("DOI"), "10.1145/3292500.3330701");
+    assert.include(item.relatedItems, published.key);
+    assert.include(published.relatedItems, item.key);
+    // A second time, the imported version is reused.
+    const again = await addAsRelated(
+      await optunaPreprint(),
+      outcome.match,
+      collection.id,
+    );
+    assert.equal(again.id, published.id);
+  });
+
+  it("updates an item to the published version, keeping its children", async function () {
+    const item = await optunaPreprint();
+    const note = new Zotero.Item("note");
+    note.parentID = item.id;
+    note.setNote("<p>My reading notes</p>");
+    await note.saveTx();
+    const attachment = await Zotero.Attachments.linkFromURL({
+      url: "https://arxiv.org/pdf/1907.10902",
+      parentItemID: item.id,
+      title: "Preprint PDF",
+    });
+    item.addTag("to-read");
+    await item.saveTx();
+
+    const outcome = await searchPublishedVersion(item, () => {});
+    if (outcome.kind !== "found") throw new Error(outcome.kind);
+    await updateToPublished(item, outcome.match);
+
+    assert.equal(Zotero.ItemTypes.getName(item.itemTypeID), "conferencePaper");
+    assert.equal(item.getField("DOI"), "10.1145/3292500.3330701");
+    assert.match(item.getField("extra") as string, /^arXiv: 1907\.10902$/m);
+    assert.include(item.getAttachments(), attachment.id);
+    assert.include(item.getNotes(), note.id);
+    assert.lengthOf(item.getNotes(), 2, "plus the note with the old metadata");
+    assert.isTrue(item.hasTag("to-read"));
+    assert.isTrue(item.inCollection(collection.id));
+    assert.isAtLeast(
+      item.getCreators().length,
+      5,
+      "authors from the publisher",
+    );
+  });
+
+  it("shows the report window and checks the collection", async function () {
+    const report = await openReport(Zotero.getMainWindow(), collection);
+    try {
+      const doc = report.doc;
+      (doc.querySelector(".pinakes-check-button") as HTMLElement).click();
+      for (let i = 0; i < 240 && report.run !== undefined; i++) {
+        await Zotero.Promise.delay(250);
+      }
+      assert.isUndefined(report.run, "check finished");
+      const found = doc.querySelectorAll(".pinakes-found");
+      assert.isAtLeast(found.length, 1);
+      assert.match(found[0].textContent ?? "", /Published: KDD 2019/);
+      assert.isFalse(
+        (doc.querySelector(".pinakes-dialog-footer") as HTMLElement).hidden,
+      );
+      assert.match(
+        doc.querySelector(".pinakes-apply")?.textContent ?? "",
+        /Apply to selected \(\d+\)/,
+      );
+    } finally {
+      report.win.close();
     }
   });
 });

@@ -7,6 +7,10 @@ import {
 } from "./modules/citationPopups";
 import { invalidateLibraryIndex } from "./modules/library";
 import {
+  registerCollectionMenu,
+  unregisterCollectionMenu,
+} from "./modules/publishedReport";
+import {
   refreshLibraryMarks,
   registerSection,
   unregisterSection,
@@ -83,10 +87,12 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
     link.href = `chrome://${config.addonRef}/content/pinakes.css`;
     doc.documentElement?.appendChild(link);
   }
+  registerCollectionMenu(win);
 }
 
 async function onMainWindowUnload(win: Window): Promise<void> {
   win.document.getElementById(STYLESHEET_ID)?.remove();
+  unregisterCollectionMenu(win);
   win.document.querySelector(`[href="${MAIN_FTL}"]`)?.remove();
 }
 

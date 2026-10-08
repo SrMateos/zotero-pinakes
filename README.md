@@ -26,6 +26,10 @@ sends no telemetry.
   Cancel button are shown while it runs.
 - **Filter.** Narrow the list by title, author, venue, year, DOI or arXiv
   ID.
+- **Published versions.** Right-click a collection and choose **Pinakes:
+  find published versions…** to find the published version of preprints
+  and workshop papers in DBLP. See
+  [Finding published versions](#finding-published-versions).
 - **PDF fallback.** If no API has the references, Pinakes reads the
   bibliography from the PDF and resolves each entry through Crossref.
 - **Citation popups (experimental).** In the reader, hovering a marker such
@@ -80,6 +84,34 @@ entry. The result:
   were hidden;
 - with no usable PDF, the API order is kept and a note explains why.
 
+## Finding published versions
+
+Many items are arXiv preprints or workshop papers that were later
+published. Right-click a collection, choose **Pinakes: find published
+versions…**, pick which items to check and press **Check in DBLP**:
+
+- **Preprints and items without a venue** (default): items of type
+  _Preprint_, items whose venue is arXiv, CoRR, bioRxiv and the like, items
+  with an arXiv ID but no publisher DOI, and items with no publication or
+  proceedings title.
+- **All items**: also finds, for example, the conference version of a
+  workshop paper.
+
+Only clear matches are accepted: the same title (ignoring case and
+punctuation), a year at most one year before or four years after the
+item's, and at least half of the item's authors. When the item has an arXiv
+ID or a DOI, DBLP's record for it is used to find versions whose title is
+written differently. DBLP only covers computer science.
+
+The report lists what was found. Nothing changes until you select items,
+choose an action and confirm it:
+
+| Action                          | What it does                                                                                                                                                                                                       |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Add a note and tag              | A child note describing the published version, and the tag "Published version available".                                                                                                                          |
+| Import as a related item        | Imports the published version into the collection (by DOI, as _Add Item by Identifier_ does) and relates the two items. A version already in the library (same DOI) is reused.                                     |
+| Update to the published version | Replaces the item type, fields and authors with the published metadata. Attachments, notes, tags, collections and related items are kept; the arXiv ID is kept in Extra, and a note records the previous metadata. |
+
 ## Where imported items go
 
 | Import target (Settings → Pinakes) | Where the item is created                                                                         |
@@ -107,16 +139,20 @@ so group libraries work. Read-only libraries are refused with an error.
 
 Pinakes itself contacts only these hosts:
 
-| Purpose               | Request                                                                                                                                                                                |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| References (primary)  | `GET https://api.semanticscholar.org/graph/v1/paper/{DOI:<doi>\|ARXIV:<id>}/references?fields=title,authors,year,venue,externalIds,abstract,publicationTypes&offset=<n>&limit=500`     |
-| References (fallback) | `GET https://api.openalex.org/works/doi:<doi>?select=id,referenced_works`, then `GET https://api.openalex.org/works?filter=ids.openalex:<ids>&per-page=50&select=…`                    |
-| PDF fallback only     | `GET https://api.crossref.org/works?query.bibliographic=<entry text>&rows=3&select=DOI,title,author,issued,container-title,type,abstract`, one request per entry, at least 0.6 s apart |
+| Purpose               | Request                                                                                                                                                                                                                                        |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| References (primary)  | `GET https://api.semanticscholar.org/graph/v1/paper/{DOI:<doi>\|ARXIV:<id>}/references?fields=title,authors,year,venue,externalIds,abstract,publicationTypes&offset=<n>&limit=500`                                                             |
+| References (fallback) | `GET https://api.openalex.org/works/doi:<doi>?select=id,referenced_works`, then `GET https://api.openalex.org/works?filter=ids.openalex:<ids>&per-page=50&select=…`                                                                            |
+| Published versions    | `GET https://sparql.dblp.org/sparql?query=<SPARQL query>`: DBLP records with the item's title, or sharing the title of the record with its arXiv DOI or DOI. One request per item, at least 0.7 s apart, only when you press **Check in DBLP** |
+| PDF fallback only     | `GET https://api.crossref.org/works?query.bibliographic=<entry text>&rows=3&select=DOI,title,author,issued,container-title,type,abstract`, one request per entry, at least 0.6 s apart                                                         |
 
 - **arXiv papers in OpenAlex.** They are looked up by their DataCite DOI,
   `10.48550/arxiv.<id>`.
 - **API key.** If you set a Semantic Scholar API key, it is sent only in
   the `x-api-key` header to `api.semanticscholar.org`.
+- **DBLP.** Pinakes queries DBLP's SPARQL service rather than its search
+  API at `dblp.org/search/publ/api`, which now answers programs with a
+  "Making sure you're not a bot" page instead of JSON.
 - **Import.** Importing runs Zotero's own translators, as _Add Item by
   Identifier_ does. These contact doi.org, Crossref, DataCite or arXiv,
   and may download an open-access PDF.
@@ -183,15 +219,16 @@ File…**.
 
 Modules in `src/modules/`:
 
-| Module                                           | Responsibility                                                |
-| ------------------------------------------------ | ------------------------------------------------------------- |
-| `section.ts`                                     | Item pane section: rendering, filter, import and batch import |
-| `loader.ts`                                      | Cache → APIs → paper order → PDF fallback pipeline            |
-| `sources.ts`                                     | Semantic Scholar and OpenAlex clients, retry and backoff      |
-| `pdf.ts`, `bibliography.ts`, `ordering.ts`       | PDF bibliography, Crossref resolution, paper order            |
-| `library.ts`, `importer.ts`, `selectionGuard.ts` | Library matching, import target and translation               |
-| `citations.ts`, `citationPopups.ts`              | Citation markers and reader popups                            |
-| `identifiers.ts`, `cache.ts`, `dom.ts`           | Shared helpers                                                |
+| Module                                                  | Responsibility                                                |
+| ------------------------------------------------------- | ------------------------------------------------------------- |
+| `section.ts`                                            | Item pane section: rendering, filter, import and batch import |
+| `loader.ts`                                             | Cache → APIs → paper order → PDF fallback pipeline            |
+| `sources.ts`                                            | Semantic Scholar and OpenAlex clients, retry and backoff      |
+| `pdf.ts`, `bibliography.ts`, `ordering.ts`              | PDF bibliography, Crossref resolution, paper order            |
+| `library.ts`, `importer.ts`, `selectionGuard.ts`        | Library matching, import target and translation               |
+| `citations.ts`, `citationPopups.ts`                     | Citation markers and reader popups                            |
+| `dblp.ts`, `publishedVersions.ts`, `publishedReport.ts` | Published versions in DBLP: matching, actions, report window  |
+| `identifiers.ts`, `cache.ts`, `dom.ts`                  | Shared helpers                                                |
 
 ### Continuous integration
 
