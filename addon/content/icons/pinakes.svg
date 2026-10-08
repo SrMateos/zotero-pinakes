@@ -1,5 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#6b7785" stroke-width="1.2" stroke-linecap="round">
-  <!-- A tablet with catalogue lines: Callimachus' Pinakes. -->
-  <rect x="2.5" y="1.5" width="11" height="13" rx="1.5"/>
-  <path d="M5 5h6M5 8h6M5 11h4"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="#a6507b" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Pinakes: a papyrus scroll unrolling, for Callimachus' catalogue. Colour for the light theme (Zotero tag colour "plum"). -->
+  <rect x="3.125" y="2.625" width="13.75" height="2.75" rx="1.375"/>
+  <rect x="3.125" y="13.625" width="13.75" height="3.75" rx="1.875"/>
+  <path d="M6.875 13.625a1.875 1.875 0 0 0 0 3.75M4.75 5.375v8.25M15.25 5.375v8.25M7 7.75h6M7 10h6M7 12h3"/>
 </svg>

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="#c77ba2" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Pinakes: a papyrus scroll unrolling, for Callimachus' catalogue. Colour for the dark theme: a lighter plum for contrast. -->
+  <rect x="3.125" y="2.625" width="13.75" height="2.75" rx="1.375"/>
+  <rect x="3.125" y="13.625" width="13.75" height="3.75" rx="1.875"/>
+  <path d="M6.875 13.625a1.875 1.875 0 0 0 0 3.75M4.75 5.375v8.25M15.25 5.375v8.25M7 7.75h6M7 10h6M7 12h3"/>
+</svg>

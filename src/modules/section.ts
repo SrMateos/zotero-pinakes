@@ -24,6 +24,7 @@ import { sourceLabel } from "./sources";
 import type { Reference, ReferenceList } from "./types";
 
 const ICON = `chrome://${config.addonRef}/content/icons/pinakes.svg`;
+const DARK_ICON = `chrome://${config.addonRef}/content/icons/pinakes-dark.svg`;
 
 /**
  * In the library view, wait this long before fetching an uncached list, so
@@ -64,8 +65,16 @@ export function registerSection() {
   paneID = Zotero.ItemPaneManager.registerSection({
     paneID: "references",
     pluginID: config.addonID,
-    header: { l10nID: `${config.addonRef}-section-header`, icon: ICON },
-    sidenav: { l10nID: `${config.addonRef}-section-sidenav`, icon: ICON },
+    header: {
+      l10nID: `${config.addonRef}-section-header`,
+      icon: ICON,
+      darkIcon: DARK_ICON,
+    },
+    sidenav: {
+      l10nID: `${config.addonRef}-section-sidenav`,
+      icon: ICON,
+      darkIcon: DARK_ICON,
+    },
     onInit: ({ body, doc }) => {
       states.set(body, {
         body,
