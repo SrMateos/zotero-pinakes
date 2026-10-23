@@ -27,7 +27,9 @@ sends no telemetry.
 - **Filter.** Narrow the list by title, author, venue, year, DOI or arXiv
   ID.
 - **PDF fallback.** If no API has the references, Pinakes reads the
-  bibliography from the PDF and resolves each entry through Crossref.
+  bibliography from the PDF and resolves each entry through Crossref. When
+  an API does have them, Crossref is asked only for the paper's entries
+  that the API lacks or has without a DOI or arXiv ID.
 - **Citation popups (experimental).** In the reader, hovering a marker such
   as `[23]` or `[4, 7–9]` shows the cited references.
 - **Caching.** Lists are kept in memory and in
@@ -107,11 +109,11 @@ so group libraries work. Read-only libraries are refused with an error.
 
 Pinakes itself contacts only these hosts:
 
-| Purpose               | Request                                                                                                                                                                                |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| References (primary)  | `GET https://api.semanticscholar.org/graph/v1/paper/{DOI:<doi>\|ARXIV:<id>}/references?fields=title,authors,year,venue,externalIds,abstract,publicationTypes&offset=<n>&limit=500`     |
-| References (fallback) | `GET https://api.openalex.org/works/doi:<doi>?select=id,referenced_works`, then `GET https://api.openalex.org/works?filter=ids.openalex:<ids>&per-page=50&select=…`                    |
-| PDF fallback only     | `GET https://api.crossref.org/works?query.bibliographic=<entry text>&rows=3&select=DOI,title,author,issued,container-title,type,abstract`, one request per entry, at least 0.6 s apart |
+| Purpose               | Request                                                                                                                                                                                                                                              |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| References (primary)  | `GET https://api.semanticscholar.org/graph/v1/paper/{DOI:<doi>\|ARXIV:<id>}/references?fields=title,authors,year,venue,externalIds,abstract,publicationTypes&offset=<n>&limit=500`                                                                   |
+| References (fallback) | `GET https://api.openalex.org/works/doi:<doi>?select=id,referenced_works`, then `GET https://api.openalex.org/works?filter=ids.openalex:<ids>&per-page=50&select=…`                                                                                  |
+| PDF fallback only     | `GET https://api.crossref.org/works?query.bibliographic=<entry text>&rows=3&select=DOI,title,author,issued,container-title,type,abstract`, one request per entry, at least 0.6 s apart. With an API list, only for entries without a DOI or arXiv ID |
 
 - **arXiv papers in OpenAlex.** They are looked up by their DataCite DOI,
   `10.48550/arxiv.<id>`.

@@ -36,6 +36,16 @@ export function entryReference(entry: BibEntry, index: number): Reference {
   };
 }
 
+/**
+ * An API record with no authors, year or identifier: what an API's PDF
+ * parser produces from text it mistook for a reference ("read_file",
+ * "A.1.1 Trace …"), and also its record of a real reference it could not
+ * link, often with a mangled title ("2025. Why do multi-agent llm systems").
+ */
+export function isBare(ref: Reference) {
+  return !ref.doi && !ref.arxiv && !ref.authors.length && !ref.year;
+}
+
 /** Does this API reference correspond to this bibliography entry? */
 function sameWork(ref: Reference, entry: BibEntry) {
   if (titleInEntry(ref.title, entry.text)) return true;
@@ -49,9 +59,11 @@ function sameWork(ref: Reference, entry: BibEntry) {
  *
  * - each entry takes the API reference that matches it (by title, else by
  *   DOI or arXiv ID in the entry) and the entry's label ("12" for "[12]");
+ *   a reference without DOI or arXiv ID takes those printed in the entry;
  * - entries the API does not have are kept, from their text (see
  *   entryReference), so the list is the paper's full bibliography;
- * - API references that match no entry are appended at the end.
+ * - API references that match no entry are appended at the end, except
+ *   bare ones (see isBare), which are dropped and counted in `dropped`.
  *
  * Indexes are renumbered 1..n in the new order.
  */
@@ -68,18 +80,30 @@ export function orderByPaper(references: Reference[], entries: BibEntry[]) {
     if (ref) {
       unused.delete(ref);
       matched++;
-      ordered.push({ ...ref, label: entry.label, raw: entry.text });
+      const ids =
+        ref.doi || ref.arxiv
+          ? {}
+          : { doi: normalizeDOI(entry.text), arxiv: arxivInText(entry.text) };
+      ordered.push({ ...ref, ...ids, label: entry.label, raw: entry.text });
     } else {
       ordered.push(entryReference(entry, 0));
     }
   }
+  let dropped = 0;
   for (const ref of references) {
-    if (unused.has(ref)) ordered.push({ ...ref, label: undefined });
+    if (!unused.has(ref)) continue;
+    if (isBare(ref)) {
+      unused.delete(ref);
+      dropped++;
+    } else {
+      ordered.push({ ...ref, label: undefined });
+    }
   }
   return {
     references: ordered.map((ref, i) => ({ ...ref, index: i + 1 })),
     matched,
     extra: unused.size,
+    dropped,
     complete: isComplete(entries),
   };
 }

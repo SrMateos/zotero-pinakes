@@ -10,7 +10,7 @@ test("orderByPaper follows the bibliography and keeps its numbers", () => {
   const api = [
     ref(1, "Long short-term memory"),
     ref(2, "Layer normalization"),
-    ref(3, "Something only the API has"),
+    ref(3, "Something only the API has", { year: 2020 }),
     ref(4, "Adam", { arxiv: "1412.6980" }),
   ];
   const entries = [
@@ -71,4 +71,45 @@ test("orderByPaper reuses a reference cited twice", () => {
       ["2", "Evaluating agent-based program repair at Google"],
     ],
   );
+});
+
+test("orderByPaper drops bare API records that match no entry", () => {
+  // Semantic Scholar's records for arXiv:2607.02599 (ACL author-year
+  // style): appendix text taken for references, and real references it
+  // could not link, with mangled titles.
+  const api = [
+    ref(1, "Two-variable logic on data words", {
+      doi: "10.1145/1970398.1970403",
+      year: 2011,
+    }),
+    ref(2, "2025. Why do multi-agent llm systems"),
+    ref(3, "read_file"),
+    ref(4, "A.1.1 Trace A trace is a finite sequence"),
+    ref(5, "Process Mining: Data Science in Action , 2 edition", {
+      year: 2016,
+    }),
+  ];
+  const entries = [
+    {
+      text: "Mikołaj Bojańczyk, Claire David, Anca Muscholl, Thomas Schwentick, and Luc Segoufin. 2011. Two-variable logic on data words. ACM Transactions on Computational Logic, 12(4):27:1–27:26.",
+    },
+    {
+      text: "Mert Cemri, Melissa Z. Pan, and Ion Stoica. 2025. Why do multi-agent llm systems fail? Preprint, arXiv:2503.13657.",
+    },
+  ];
+  const result = orderByPaper(api, entries);
+  assert.equal(result.matched, 2);
+  assert.equal(result.dropped, 2);
+  assert.equal(result.extra, 1);
+  assert.deepEqual(
+    result.references.map((r) => r.title),
+    [
+      "Two-variable logic on data words",
+      "2025. Why do multi-agent llm systems",
+      "Process Mining: Data Science in Action , 2 edition",
+    ],
+  );
+  // The unlinked record takes the arXiv ID printed in its entry.
+  assert.equal(result.references[1].arxiv, "2503.13657");
+  assert.equal(result.references[0].arxiv, undefined);
 });
