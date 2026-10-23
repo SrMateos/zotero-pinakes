@@ -79,37 +79,16 @@ export async function referencesFromPdf(
 ): Promise<ReferenceList> {
   onStatus("Reading the bibliography from the PDF…");
   const { entries } = await readBibliography(item);
-
-  const references: Reference[] = [];
-  let resolved = 0;
-  let crossrefError: string | undefined;
-  for (const [i, entry] of entries.entries()) {
-    if (isCancelled()) throw new SourceError("Cancelled.");
-    onStatus(
-      `Resolving PDF references via Crossref: ${i + 1} of ${entries.length}…`,
-    );
-    let ref: Reference | undefined;
-    if (!crossrefError) {
-      const started = Date.now();
-      try {
-        ref = await resolveEntry(entry, i + 1, onStatus);
-      } catch (e) {
-        // Stop querying after a hard failure; keep the rest as text.
-        crossrefError = e instanceof Error ? e.message : String(e);
-        log("Crossref failed", e);
-      }
-      const wait = CROSSREF_SPACING_MS - (Date.now() - started);
-      if (wait > 0) await Zotero.Promise.delay(wait);
-    }
-    ref ??= entryReference(entry, i + 1);
-    if (!ref.unresolved) resolved++;
-    references.push(ref);
-  }
+  const { found, error } = await resolveEntries(entries, onStatus, isCancelled);
+  const references = entries.map(
+    (entry, i) => found[i] ?? entryReference(entry, i + 1),
+  );
+  const resolved = references.filter((r) => !r.unresolved).length;
 
   notes.push(
     `Extracted ${entries.length} references from the PDF; ${resolved} resolved via Crossref.`,
   );
-  if (crossrefError) notes.push(`Crossref: ${crossrefError}`);
+  if (error) notes.push(`Crossref: ${error}`);
   return {
     paperId,
     source: "pdf",
@@ -118,6 +97,38 @@ export async function referencesFromPdf(
     references,
     notes,
   };
+}
+
+/**
+ * Resolve entries via Crossref, one request at a time (as the Crossref
+ * public pool asks). `found[i]` is undefined where nothing matched. After
+ * a hard failure the remaining entries are not queried, and `error` says
+ * why.
+ */
+async function resolveEntries(
+  entries: BibEntry[],
+  onStatus: StatusCallback,
+  isCancelled: () => boolean,
+) {
+  const found: Array<Reference | undefined> = [];
+  let error: string | undefined;
+  for (const [i, entry] of entries.entries()) {
+    if (isCancelled()) throw new SourceError("Cancelled.");
+    if (error) break;
+    onStatus(
+      `Resolving PDF references via Crossref: ${i + 1} of ${entries.length}…`,
+    );
+    const started = Date.now();
+    try {
+      found[i] = await resolveEntry(entry, i + 1, onStatus);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      log("Crossref failed", e);
+    }
+    const wait = CROSSREF_SPACING_MS - (Date.now() - started);
+    if (wait > 0) await Zotero.Promise.delay(wait);
+  }
+  return { found, error };
 }
 
 const CROSSREF_KIND: Record<string, RefKind> = {
@@ -182,13 +193,18 @@ async function resolveEntry(
 
 /**
  * Put an API list in the order of the paper's bibliography, read locally
- * from the PDF (no network). If the PDF or its bibliography is unavailable,
- * or too few entries match (probably a different PDF or a parsing
- * problem), the API order is kept and a note says why.
+ * from the PDF. If the PDF or its bibliography is unavailable, or too few
+ * entries match (probably a different PDF or a parsing problem), the API
+ * order is kept and a note says why.
+ *
+ * With `crossref`, entries left without a DOI or arXiv ID (not in the API,
+ * or in it only as an unlinked record) are resolved via Crossref, as in the
+ * PDF fallback. Without it, no request is sent.
  */
 export async function applyPaperOrder(
   item: Zotero.Item,
   list: ReferenceList,
+  crossref?: { onStatus: StatusCallback; isCancelled: () => boolean },
 ): Promise<ReferenceList> {
   const label = sourceLabel(list.source);
   let entries;
@@ -224,7 +240,7 @@ export async function applyPaperOrder(
     };
   }
   log(
-    `Paper order: ${result.matched} of ${entries.length} entries matched, ${result.extra} extra`,
+    `Paper order: ${result.matched} of ${entries.length} entries matched, ${result.extra} extra, ${result.dropped} dropped`,
   );
   const notes = [...list.notes];
   const missing = entries.length - result.matched;
@@ -234,6 +250,11 @@ export async function applyPaperOrder(
     );
   }
   let references = result.references;
+  if (result.dropped) {
+    notes.push(
+      `Hidden ${result.dropped} entries from ${label} that have no authors, year or identifier and are not in the paper's bibliography (usually text its PDF parser mistook for references).`,
+    );
+  }
   if (result.extra && result.complete) {
     // The bibliography was read completely ([1]..[N]), so these are not
     // references of the paper.
@@ -246,5 +267,41 @@ export async function applyPaperOrder(
       `${result.extra} references from ${label} were not found in the PDF bibliography; they are listed at the end.`,
     );
   }
+  if (crossref) {
+    references = await resolveUnidentified(references, notes, crossref);
+  }
   return { ...list, references, order: "paper", notes };
+}
+
+/**
+ * Replace bibliography entries that have no DOI or arXiv ID with their
+ * Crossref match, keeping the paper's label and position. Entries Crossref
+ * does not match are left as they were.
+ */
+async function resolveUnidentified(
+  references: Reference[],
+  notes: string[],
+  {
+    onStatus,
+    isCancelled,
+  }: { onStatus: StatusCallback; isCancelled: () => boolean },
+) {
+  const pending = references.filter((r) => r.raw && !r.doi && !r.arxiv);
+  if (!pending.length) return references;
+  const { found, error } = await resolveEntries(
+    pending.map((r) => ({ label: r.label, text: r.raw! })),
+    onStatus,
+    isCancelled,
+  );
+  const matches = new Map(
+    pending.flatMap((r, i) => (found[i] ? [[r, found[i]] as const] : [])),
+  );
+  notes.push(
+    `${matches.size} of ${pending.length} references without a DOI or arXiv ID resolved via Crossref.`,
+  );
+  if (error) notes.push(`Crossref: ${error}`);
+  return references.map((r) => {
+    const match = matches.get(r);
+    return match ? { ...match, index: r.index, label: r.label } : r;
+  });
 }

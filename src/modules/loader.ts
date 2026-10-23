@@ -14,7 +14,10 @@ import type { ReferenceList } from "./types";
 export interface LoadOptions {
   /** Ignore the cache (Refresh). */
   force: boolean;
-  /** Allow the PDF fallback, which sends one Crossref request per entry. */
+  /**
+   * Allow Crossref requests, one per PDF bibliography entry: the PDF
+   * fallback, and entries without a DOI or arXiv ID in an API list.
+   */
   allowPdf: boolean;
   /** Wait this long before going to the network (library view debounce). */
   delayMs: number;
@@ -76,7 +79,10 @@ export async function loadReferenceList(
       const fetched = await fetchReferences(paperId, options.onStatus);
       if (options.isStale()) return { kind: "stale" };
       options.onStatus("Ordering as in the paper's bibliography…");
-      return saved(item, await applyPaperOrder(item, fetched));
+      const crossref = usePdf
+        ? { onStatus: options.onStatus, isCancelled: options.isStale }
+        : undefined;
+      return saved(item, await applyPaperOrder(item, fetched, crossref));
     } catch (e) {
       if (options.isStale()) return { kind: "stale" };
       const message = errorMessage(e);
