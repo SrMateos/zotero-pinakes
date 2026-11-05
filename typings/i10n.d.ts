@@ -3,6 +3,7 @@
 /* eslint-disable */
 // @ts-nocheck
 export type FluentMessageId =
+  | 'pinakes-find-published'
   | 'pref-about'
   | 'pref-citation-popups'
   | 'pref-citation-popups-help'

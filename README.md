@@ -26,9 +26,9 @@ sends no telemetry.
   Cancel button are shown while it runs.
 - **Filter.** Narrow the list by title, author, venue, year, DOI or arXiv
   ID.
-- **Published versions.** Right-click a collection and choose **Pinakes:
-  find published versions…** to find the published version of preprints
-  and workshop papers in DBLP. See
+- **Published versions.** Select one or more items, right-click and choose
+  **Pinakes: find published versions…** to find their published versions in
+  DBLP. See
   [Finding published versions](#finding-published-versions).
 - **PDF fallback.** If no API has the references, Pinakes reads the
   bibliography from the PDF and resolves each entry through Crossref.
@@ -87,30 +87,35 @@ entry. The result:
 ## Finding published versions
 
 Many items are arXiv preprints or workshop papers that were later
-published. Right-click a collection, choose **Pinakes: find published
-versions…**, pick which items to check and press **Check in DBLP**:
+published. Select one or more items, right-click, choose **Pinakes: find
+published versions…** and press **Check in DBLP**. Attachments and notes
+stand for their paper, so selecting the PDF works too.
 
-- **Preprints and items without a venue** (default): items of type
-  _Preprint_, items whose venue is arXiv, CoRR, bioRxiv and the like, items
-  with an arXiv ID but no publisher DOI, and items with no publication or
-  proceedings title.
-- **All items**: also finds, for example, the conference version of a
-  workshop paper.
-
-Only clear matches are accepted: the same title (ignoring case and
+Every selected item is checked, whatever its type, so select just the
+papers you want to look up (Ctrl+A checks the whole list). Only clear
+matches are accepted: the same title (ignoring case and
 punctuation), a year at most one year before or four years after the
 item's, and at least half of the item's authors. When the item has an arXiv
 ID or a DOI, DBLP's record for it is used to find versions whose title is
 written differently. DBLP only covers computer science.
 
-The report lists what was found. Nothing changes until you select items,
-choose an action and confirm it:
+The report lists what was found. Nothing changes until you select items
+and press **Update selected** and confirm it: the item type, fields and
+authors are replaced with the published metadata. Attachments, notes,
+tags, collections and related items are kept, the arXiv ID is kept in
+Extra, and a note records the previous metadata. If the published version
+is already in the library, the two are merged into one item (keeping the
+attachments, notes and collections of both) instead of leaving two copies.
 
-| Action                          | What it does                                                                                                                                                                                                       |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Add a note and tag              | A child note describing the published version, and the tag "Published version available".                                                                                                                          |
-| Import as a related item        | Imports the published version into the collection (by DOI, as _Add Item by Identifier_ does) and relates the two items. A version already in the library (same DOI) is reused.                                     |
-| Update to the published version | Replaces the item type, fields and authors with the published metadata. Attachments, notes, tags, collections and related items are kept; the arXiv ID is kept in Extra, and a note records the previous metadata. |
+Each updated item then gets the published full text, looked up exactly as
+Zotero's **Find Full Text** does (publisher page, open-access copies,
+your own resolvers):
+
+- with no PDF, the published one is attached;
+- with a PDF that is the same document (Zotero's text check), the new
+  file replaces it and the annotations move over to the new attachment;
+- with a PDF that is a different document (an arXiv version, say), both
+  are kept and the old one keeps its annotations untouched.
 
 ## Where imported items go
 
@@ -139,12 +144,13 @@ so group libraries work. Read-only libraries are refused with an error.
 
 Pinakes itself contacts only these hosts:
 
-| Purpose               | Request                                                                                                                                                                                                                                        |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| References (primary)  | `GET https://api.semanticscholar.org/graph/v1/paper/{DOI:<doi>\|ARXIV:<id>}/references?fields=title,authors,year,venue,externalIds,abstract,publicationTypes&offset=<n>&limit=500`                                                             |
-| References (fallback) | `GET https://api.openalex.org/works/doi:<doi>?select=id,referenced_works`, then `GET https://api.openalex.org/works?filter=ids.openalex:<ids>&per-page=50&select=…`                                                                            |
-| Published versions    | `GET https://sparql.dblp.org/sparql?query=<SPARQL query>`: DBLP records with the item's title, or sharing the title of the record with its arXiv DOI or DOI. One request per item, at least 0.7 s apart, only when you press **Check in DBLP** |
-| PDF fallback only     | `GET https://api.crossref.org/works?query.bibliographic=<entry text>&rows=3&select=DOI,title,author,issued,container-title,type,abstract`, one request per entry, at least 0.6 s apart                                                         |
+| Purpose               | Request                                                                                                                                                                                                                                                                                |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| References (primary)  | `GET https://api.semanticscholar.org/graph/v1/paper/{DOI:<doi>\|ARXIV:<id>}/references?fields=title,authors,year,venue,externalIds,abstract,publicationTypes&offset=<n>&limit=500`                                                                                                     |
+| References (fallback) | `GET https://api.openalex.org/works/doi:<doi>?select=id,referenced_works`, then `GET https://api.openalex.org/works?filter=ids.openalex:<ids>&per-page=50&select=…`                                                                                                                    |
+| Published versions    | `GET https://sparql.dblp.org/sparql?query=<SPARQL query>`: DBLP records with the item's title, or sharing the title of the record with its arXiv DOI or DOI. One request per item, at least 0.7 s apart, only when you press **Check in DBLP**                                         |
+| Published full text   | Zotero's own _Find Full Text_, run per updated item after **Update selected**: `POST https://www.zotero.org/services/oa/search` for open-access copies, `GET https://doi.org/<DOI>` and the item's URL (publisher pages), PMC pages, and any custom resolvers you configured in Zotero |
+| PDF fallback only     | `GET https://api.crossref.org/works?query.bibliographic=<entry text>&rows=3&select=DOI,title,author,issued,container-title,type,abstract`, one request per entry, at least 0.6 s apart                                                                                                 |
 
 - **arXiv papers in OpenAlex.** They are looked up by their DataCite DOI,
   `10.48550/arxiv.<id>`.
@@ -156,6 +162,10 @@ Pinakes itself contacts only these hosts:
 - **Import.** Importing runs Zotero's own translators, as _Add Item by
   Identifier_ does. These contact doi.org, Crossref, DataCite or arXiv,
   and may download an open-access PDF.
+- **Published full text.** After updating an item, Pinakes runs Zotero's
+  _Find Full Text_ resolvers for it, which contact Zotero's open-access
+  service, doi.org, the item's URL and, if you configured them, your own
+  resolvers. No request is made when you only run the DBLP check.
 - **Open.** It opens the DOI or arXiv page in your browser.
 
 Nothing else is sent anywhere. Rate limits (HTTP 429) and server errors
@@ -219,16 +229,16 @@ File…**.
 
 Modules in `src/modules/`:
 
-| Module                                                  | Responsibility                                                |
-| ------------------------------------------------------- | ------------------------------------------------------------- |
-| `section.ts`                                            | Item pane section: rendering, filter, import and batch import |
-| `loader.ts`                                             | Cache → APIs → paper order → PDF fallback pipeline            |
-| `sources.ts`                                            | Semantic Scholar and OpenAlex clients, retry and backoff      |
-| `pdf.ts`, `bibliography.ts`, `ordering.ts`              | PDF bibliography, Crossref resolution, paper order            |
-| `library.ts`, `importer.ts`, `selectionGuard.ts`        | Library matching, import target and translation               |
-| `citations.ts`, `citationPopups.ts`                     | Citation markers and reader popups                            |
-| `dblp.ts`, `publishedVersions.ts`, `publishedReport.ts` | Published versions in DBLP: matching, actions, report window  |
-| `identifiers.ts`, `cache.ts`, `dom.ts`                  | Shared helpers                                                |
+| Module                                                  | Responsibility                                                    |
+| ------------------------------------------------------- | ----------------------------------------------------------------- |
+| `section.ts`                                            | Item pane section: rendering, filter, import and batch import     |
+| `loader.ts`                                             | Cache → APIs → paper order → PDF fallback pipeline                |
+| `sources.ts`                                            | Semantic Scholar and OpenAlex clients, retry and backoff          |
+| `pdf.ts`, `bibliography.ts`, `ordering.ts`              | PDF bibliography, Crossref resolution, paper order                |
+| `library.ts`, `importer.ts`, `selectionGuard.ts`        | Library matching, import target and translation                   |
+| `citations.ts`, `citationPopups.ts`                     | Citation markers and reader popups                                |
+| `dblp.ts`, `publishedVersions.ts`, `publishedReport.ts` | Published versions in DBLP: matching, update, merge and full text |
+| `identifiers.ts`, `cache.ts`, `dom.ts`                  | Shared helpers                                                    |
 
 ### Continuous integration
 

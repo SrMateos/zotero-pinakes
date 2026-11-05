@@ -58,19 +58,8 @@ const PUBLISHED_TYPES = new Set(["Article", "Inproceedings", "Incollection"]);
 const YEARS_BEFORE = 1;
 const YEARS_AFTER = 4;
 
+/** Venues that mean "preprint", never a published version. */
 const PREPRINT_VENUE = /\b(arxiv|corr|biorxiv|medrxiv|ssrn|preprints?)\b/i;
-
-/**
- * Should the item be checked when only preprints and items without a
- * venue are checked? True for preprints (item type, arXiv-like venue, or
- * an arXiv ID without a publisher DOI) and for items with no venue.
- */
-export function isPreprintOrUnpublished(info: ItemInfo) {
-  if (info.itemType === "preprint") return true;
-  if (!info.venue.trim()) return true;
-  if (PREPRINT_VENUE.test(info.venue)) return true;
-  return !!info.arxiv && !info.doi;
-}
 
 /** Escape a string for a SPARQL string literal. */
 function literal(text: string) {

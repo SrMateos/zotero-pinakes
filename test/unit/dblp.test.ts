@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import {
   describePublication,
   findPublishedVersion,
-  isPreprintOrUnpublished,
   parseSparql,
   sparqlQuery,
   surname,
@@ -472,7 +471,6 @@ test("a workshop paper later published elsewhere", () => {
     arxiv: undefined,
     year: 2018,
   };
-  assert.equal(isPreprintOrUnpublished(workshop), false);
   const outcome = findPublishedVersion(workshop, [
     pub({ key: "w", venue: "AutoML Workshop", year: 2018, doi: undefined }),
     pub({}),
@@ -480,31 +478,6 @@ test("a workshop paper later published elsewhere", () => {
   assert.equal(
     outcome.kind === "found" && outcome.match.key,
     "conf/kdd/AkibaSYOK19",
-  );
-});
-
-test("isPreprintOrUnpublished", () => {
-  const base: ItemInfo = {
-    itemType: "journalArticle",
-    title: "T",
-    authors: [],
-    venue: "Nature",
-    doi: "10.1/x",
-  };
-  assert.equal(isPreprintOrUnpublished(base), false);
-  assert.equal(
-    isPreprintOrUnpublished({ ...base, itemType: "preprint" }),
-    true,
-  );
-  assert.equal(isPreprintOrUnpublished({ ...base, venue: "" }), true);
-  assert.equal(isPreprintOrUnpublished({ ...base, venue: "CoRR" }), true);
-  assert.equal(
-    isPreprintOrUnpublished({ ...base, venue: "arXiv preprint" }),
-    true,
-  );
-  assert.equal(
-    isPreprintOrUnpublished({ ...base, doi: undefined, arxiv: "1907.10902" }),
-    true,
   );
 });
 

@@ -1,60 +1,56 @@
 /**
- * The "Pinakes: find published versions" entry of the collection context
- * menu, and its report window: check the collection's items in DBLP one
- * at a time, list what was found, and apply an action to the selected
- * items only after the user confirms.
+ * The "Pinakes: find published versions" entry of the item context menu,
+ * and its report window: check the selected items in DBLP one at a time,
+ * list what was found, and update the selected items only after the user
+ * confirms.
  */
 import { config } from "../../package.json";
 import { log } from "../utils/log";
 import { button, h } from "./dom";
 import { describePublication, type DblpOutcome } from "./dblp";
 import {
-  addAsRelated,
-  addNoteAndTag,
+  addPublishedFullText,
+  checkableItems,
   DBLP_SPACING_MS,
-  itemsToCheck,
-  PUBLISHED_TAG,
   searchPublishedVersion,
   updateToPublished,
-  type CheckScope,
-  type PublishedAction,
+  type FullTextOutcome,
 } from "./publishedVersions";
 
 const MENU_ID = `${config.addonRef}-find-published`;
 const REPORT_URL = `chrome://${config.addonRef}/content/published.xhtml`;
+const MENU_ICON = `chrome://${config.addonRef}/content/icons/pinakes-menu.svg`;
+const MENU_DARK_ICON = `chrome://${config.addonRef}/content/icons/pinakes-menu-dark.svg`;
 
-/** Add the menu entry to a main window's collection context menu. */
-export function registerCollectionMenu(win: _ZoteroTypes.MainWindow) {
-  const doc = win.document;
-  const menu = doc.getElementById("zotero-collectionmenu");
-  if (!menu || doc.getElementById(MENU_ID)) return;
-  const item = doc.createXULElement("menuitem");
-  item.id = MENU_ID;
-  item.setAttribute("label", "Pinakes: find published versions…");
-  item.addEventListener("command", () => {
-    const collection = win.ZoteroPane.getSelectedCollection();
-    if (collection) void openReport(win, collection);
+/** Add the menu entry to the item context menu, for the selected items. */
+export function registerItemMenu() {
+  Zotero.MenuManager.registerMenu({
+    menuID: MENU_ID,
+    pluginID: config.addonID,
+    target: "main/library/item",
+    menus: [
+      {
+        menuType: "menuitem",
+        l10nID: "pinakes-find-published",
+        icon: MENU_ICON,
+        darkIcon: MENU_DARK_ICON,
+        // Only papers: attachments, notes and annotations stand for their
+        // parent, and a selection without a regular item has nothing to check.
+        onShowing: (_event, context) => {
+          context.setVisible(checkableItems(context.items ?? []).length > 0);
+        },
+        onCommand: (_event, context) => {
+          const items = checkableItems(context.items ?? []);
+          const win = Zotero.getMainWindow();
+          if (items.length && win) void openReport(win, items);
+        },
+      },
+    ],
   });
-  // Only for collections, not libraries, feeds or saved searches.
-  menu.addEventListener("popupshowing", onPopupShowing);
-  menu.append(item);
 }
 
-function onPopupShowing(event: Event) {
-  const menu = event.currentTarget as Element;
-  if (event.target !== menu) return;
-  const doc = menu.ownerDocument!;
-  const win = doc.defaultView as unknown as _ZoteroTypes.MainWindow;
-  const item = doc.getElementById(MENU_ID) as XULElement | null;
-  if (item) item.hidden = !win.ZoteroPane.getSelectedCollection();
-}
-
-export function unregisterCollectionMenu(win: Window) {
-  const doc = win.document;
-  doc.getElementById(MENU_ID)?.remove();
-  doc
-    .getElementById("zotero-collectionmenu")
-    ?.removeEventListener("popupshowing", onPopupShowing);
+export function unregisterItemMenu() {
+  Zotero.MenuManager.unregisterMenu(MENU_ID);
 }
 
 // ---------------------------------------------------------------------------
@@ -70,35 +66,28 @@ interface Row {
 interface Report {
   win: Window;
   doc: Document;
-  collection: Zotero.Collection;
+  items: Zotero.Item[];
   rows: Row[];
   /** Set while checking; cancelled when the window closes. */
   run?: { cancelled: boolean };
   applying: boolean;
 }
 
-const ACTIONS: Array<[PublishedAction, string]> = [
-  ["note", `Add a note and the tag "${PUBLISHED_TAG}"`],
-  ["related", "Import the published version as a related item"],
-  [
-    "update",
-    "Update the item to the published version (keeps attachments and notes)",
-  ],
-];
+const CONFIRM =
+  "Update {n} to the published version? Item type, fields and authors are replaced with the published metadata. Attachments, notes, tags and collections are kept, the arXiv ID is kept in Extra, and a note records the previous metadata. If the published version is already in the library, the two are merged. Then the published full text is looked up, as Find Full Text does; a PDF you have and its annotations are never replaced by a different document.";
 
-const CONFIRM: Record<PublishedAction, string> = {
-  note: `Add a note and the tag "${PUBLISHED_TAG}" to {n}?`,
-  related:
-    "Import the published version of {n} into this collection and relate it to the original? Versions already in the library (same DOI) are reused.",
-  update:
-    "Update {n} to the published version? The item type, fields and authors are replaced with the published metadata. Attachments, notes, tags and collections are kept, the arXiv ID is kept in Extra, and a note records the previous metadata.",
+/** What to say after the full-text lookup, per outcome. */
+const FULL_TEXT: Record<FullTextOutcome, string> = {
+  added: "Published full text added.",
+  replaced:
+    "Published full text added; the annotations of the previous PDF were moved to it.",
+  same: "The published full text is the PDF already attached.",
+  kept: "Published full text added next to the previous PDF, which was kept (different document).",
+  none: "No published full text found.",
 };
 
-/** Open the report for a collection; resolves once it is shown. */
-export async function openReport(
-  mainWin: Window,
-  collection: Zotero.Collection,
-) {
+/** Open the report for the selected items; resolves once it is shown. */
+export async function openReport(mainWin: Window, items: Zotero.Item[]) {
   const win = (mainWin as any).openDialog(
     REPORT_URL,
     "",
@@ -115,7 +104,7 @@ export async function openReport(
   const report: Report = {
     win,
     doc: win.document,
-    collection,
+    items,
     rows: [],
     applying: false,
   };
@@ -131,31 +120,18 @@ function $<T extends Element = HTMLElement>(report: Report, sel: string) {
 }
 
 function render(report: Report) {
-  const { doc, collection } = report;
-  doc.title = `Published versions: ${collection.name}`;
+  const { doc, items } = report;
+  doc.title = "Published versions";
 
-  const scope = h(doc, "select", "pinakes-scope");
-  for (const [value, label] of [
-    ["preprints", "Preprints and items without a venue"],
-    ["all", "All items"],
-  ]) {
-    const option = h(doc, "option", undefined, label);
-    option.value = value;
-    scope.append(option);
-  }
-  const count = h(doc, "span", "pinakes-count");
-  const updateCount = () => {
-    const n = itemsToCheck(collection, scope.value as CheckScope).length;
-    count.textContent = `${n} ${n === 1 ? "item" : "items"}`;
-    check.disabled = !n || !!report.run;
-  };
-  scope.addEventListener("change", updateCount);
-  const check = button(
+  const count = h(
     doc,
-    "Check in DBLP",
-    () => void runCheck(report, scope.value as CheckScope),
+    "span",
+    "pinakes-count",
+    `${items.length} ${items.length === 1 ? "item" : "items"}`,
   );
+  const check = button(doc, "Check in DBLP", () => void runCheck(report));
   check.classList.add("pinakes-check-button");
+  check.disabled = !items.length || !!report.run;
 
   const progress = h(doc, "div", "pinakes-progress");
   progress.append(
@@ -167,34 +143,28 @@ function render(report: Report) {
   );
   progress.hidden = true;
 
-  const action = h(doc, "select", "pinakes-action");
-  for (const [value, label] of ACTIONS) {
-    const option = h(doc, "option", undefined, label);
-    option.value = value;
-    action.append(option);
-  }
   const apply = button(
     doc,
-    "Apply to selected",
-    () => void applyAction(report, action.value as PublishedAction),
+    "Update selected",
+    () => void applyAction(report),
     "pinakes-button pinakes-apply",
   );
   const footer = h(doc, "div", "pinakes-dialog-footer");
-  footer.append(action, apply);
+  footer.append(apply);
   footer.hidden = true;
 
   const header = h(doc, "div", "pinakes-dialog-header");
   header.append(
-    h(doc, "h1", "", `Find published versions: ${collection.name}`),
+    h(doc, "h1", "", "Find published versions"),
     h(
       doc,
       "p",
       "pinakes-insights-note",
-      "Searches dblp.org by title, one request at a time, and accepts only clear matches (same title, plausible year, shared authors). DBLP covers computer science only. Nothing is changed until you apply an action.",
+      "Searches dblp.org by the title of each selected item, one request at a time, and accepts only clear matches (same title, plausible year, shared authors). DBLP covers computer science only. Nothing is changed until you press Update selected and confirm; if the published version is already in the library, the two are merged, and the published full text is then looked up as Find Full Text does, keeping the annotations of any PDF you have.",
     ),
   );
   const controls = h(doc, "div", "pinakes-toolbar");
-  controls.append(h(doc, "span", "", "Check:"), scope, count, check);
+  controls.append(h(doc, "span", "", "Check:"), count, check);
 
   doc.body!.replaceChildren(
     header,
@@ -204,7 +174,6 @@ function render(report: Report) {
     h(doc, "ol", "pinakes-list pinakes-report"),
     footer,
   );
-  updateCount();
 }
 
 function setStatus(report: Report, kind: "info" | "error", message: string) {
@@ -213,9 +182,9 @@ function setStatus(report: Report, kind: "info" | "error", message: string) {
   status.textContent = message;
 }
 
-async function runCheck(report: Report, scope: CheckScope) {
+async function runCheck(report: Report) {
   if (report.run || report.applying) return;
-  const items = itemsToCheck(report.collection, scope);
+  const items = report.items;
   const run = { cancelled: false };
   report.run = run;
   report.rows = items.map((item) => ({ item, el: renderRow(report, item) }));
@@ -337,23 +306,18 @@ function selectedRows(report: Report) {
 function updateApply(report: Report) {
   const n = selectedRows(report).length;
   const apply = $<HTMLButtonElement>(report, ".pinakes-apply");
-  apply.textContent = `Apply to selected (${n})`;
+  apply.textContent = `Update selected (${n})`;
   apply.disabled = !n || report.applying || !!report.run;
 }
 
-async function applyAction(report: Report, action: PublishedAction) {
+async function applyAction(report: Report) {
   const rows = selectedRows(report);
   if (!rows.length || report.applying || report.run) return;
-  const library = Zotero.Libraries.get(report.collection.libraryID);
-  if (library && !library.editable) {
-    setStatus(report, "error", `"${library.name}" is read-only.`);
-    return;
-  }
   const what = rows.length === 1 ? "1 item" : `${rows.length} items`;
   const ok = Services.prompt.confirm(
     report.win as any,
     config.addonName,
-    CONFIRM[action].replace("{n}", what),
+    CONFIRM.replace("{n}", what),
   );
   if (!ok) return;
 
@@ -366,25 +330,22 @@ async function applyAction(report: Report, action: PublishedAction) {
     const pub = row.outcome.match;
     const check = row.el.querySelector<HTMLInputElement>(".pinakes-check")!;
     const note = h(report.doc, "div", "pinakes-row-note");
+    const library = Zotero.Libraries.get(row.item.libraryID);
     try {
-      if (action === "note") {
-        await addNoteAndTag(row.item, pub);
-        note.textContent = "Note and tag added.";
-      } else if (action === "related") {
-        const published = await addAsRelated(
-          row.item,
-          pub,
-          report.collection.id,
-        );
-        note.textContent = `Related to item "${published.getDisplayTitle()}".`;
-      } else {
-        await updateToPublished(row.item, pub);
-        note.textContent = "Updated to the published version.";
+      if (library && !library.editable) {
+        throw new Error(`"${library.name}" is read-only.`);
       }
+      const merged = await updateToPublished(row.item, pub);
+      const updated = merged
+        ? "Updated to the published version; the duplicate was merged."
+        : "Updated to the published version.";
+      note.textContent = `${updated} Looking for the published full text…`;
       check.checked = false;
+      const fullText = await addPublishedFullText(row.item);
+      note.textContent = `${updated} ${FULL_TEXT[fullText]}`;
     } catch (e) {
       failed++;
-      log(`Action ${action} failed for item ${row.item.id}`, e);
+      log(`Update failed for item ${row.item.id}`, e);
       note.className = "pinakes-row-error";
       note.textContent = `Failed: ${e instanceof Error ? e.message : String(e)}`;
     }

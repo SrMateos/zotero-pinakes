@@ -7,8 +7,8 @@ import {
 } from "./modules/citationPopups";
 import { invalidateLibraryIndex } from "./modules/library";
 import {
-  registerCollectionMenu,
-  unregisterCollectionMenu,
+  registerItemMenu,
+  unregisterItemMenu,
 } from "./modules/publishedReport";
 import {
   refreshLibraryMarks,
@@ -40,6 +40,7 @@ async function onStartup() {
   });
 
   registerSection();
+  registerItemMenu();
 
   // Items added, edited or trashed anywhere change what is "in library".
   notifierID = Zotero.Notifier.registerObserver(
@@ -87,12 +88,10 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
     link.href = `chrome://${config.addonRef}/content/pinakes.css`;
     doc.documentElement?.appendChild(link);
   }
-  registerCollectionMenu(win);
 }
 
 async function onMainWindowUnload(win: Window): Promise<void> {
   win.document.getElementById(STYLESHEET_ID)?.remove();
-  unregisterCollectionMenu(win);
   win.document.querySelector(`[href="${MAIN_FTL}"]`)?.remove();
 }
 
@@ -103,6 +102,7 @@ function onShutdown(): void {
   unregisterCitationPopups();
   if (marksTimer) clearTimeout(marksTimer);
   unregisterSection();
+  unregisterItemMenu();
   for (const win of Zotero.getMainWindows()) void onMainWindowUnload(win);
   addon.data.alive = false;
   delete (Zotero as unknown as Record<string, unknown>)[config.addonInstance];

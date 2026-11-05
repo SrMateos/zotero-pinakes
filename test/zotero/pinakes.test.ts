@@ -10,10 +10,8 @@ import { findInLibrary, getPaperId } from "../../src/modules/library";
 import { applyPaperOrder, referencesFromPdf } from "../../src/modules/pdf";
 import { openReport } from "../../src/modules/publishedReport";
 import {
-  addAsRelated,
-  addNoteAndTag,
-  itemsToCheck,
-  PUBLISHED_TAG,
+  addPublishedFullText,
+  checkableItems,
   searchPublishedVersion,
   updateToPublished,
 } from "../../src/modules/publishedVersions";
@@ -563,6 +561,27 @@ describe("published versions in DBLP", function () {
     return item;
   }
 
+  /**
+   * Trash anything already updated to the published DOI (left by earlier
+   * runs): the merge looks the published version up by DOI.
+   */
+  async function clearPublishedCopies() {
+    const items = await Zotero.Items.getAll(
+      Zotero.Libraries.userLibraryID,
+      true,
+    );
+    for (const item of items) {
+      if (
+        item.isRegularItem() &&
+        !item.deleted &&
+        item.getField("DOI") === ACM_DOI
+      ) {
+        item.deleted = true;
+        await item.saveTx();
+      }
+    }
+  }
+
   before(async function () {
     collection = await createCollection(
       Zotero.Libraries.userLibraryID,
@@ -570,31 +589,32 @@ describe("published versions in DBLP", function () {
     );
   });
 
-  it("adds an entry to the collection context menu", function () {
+  it("adds an entry to the item context menu", async function () {
+    const pane = Zotero.getMainWindow().ZoteroPane as any;
+    const item = await optunaPreprint();
+    await pane.selectItem(item.id);
+    await pane.buildItemContextMenu();
     const doc = Zotero.getMainWindow().document;
-    const item = doc.getElementById(`${config.addonRef}-find-published`);
-    assert.isOk(item);
-    assert.equal(item!.parentElement?.id, "zotero-collectionmenu");
+    const entry = doc.querySelector(
+      '#zotero-itemmenu [data-l10n-id="pinakes-find-published"]',
+    );
+    assert.isOk(entry, "menu entry for the selected items");
   });
 
-  it("selects preprints and items without a venue", async function () {
+  it("checks the selected regular items only", async function () {
     const preprint = await optunaPreprint();
-    const published = new Zotero.Item("journalArticle");
-    published.setField(
-      "title",
-      "Random Search for Hyper-Parameter Optimization",
-    );
-    published.setField("publicationTitle", "JMLR");
-    published.setField("DOI", "10.5555/2188385.2188395");
-    published.setCollections([collection.id]);
-    await published.saveTx();
-    const ids = itemsToCheck(collection, "preprints").map((i) => i.id);
-    assert.include(ids, preprint.id);
-    assert.notInclude(ids, published.id);
-    assert.include(
-      itemsToCheck(collection, "all").map((i) => i.id),
-      published.id,
-    );
+    const note = new Zotero.Item("note");
+    note.parentID = preprint.id;
+    note.setNote("<p>My reading notes</p>");
+    await note.saveTx();
+    // Notes stand for their parent, and repeats are dropped.
+    const ids = checkableItems([preprint, note, preprint]).map((i) => i.id);
+    assert.deepEqual(ids, [preprint.id]);
+    // A standalone note has no paper to check.
+    const standalone = new Zotero.Item("note");
+    standalone.setNote("<p>Unrelated</p>");
+    await standalone.saveTx();
+    assert.isEmpty(checkableItems([standalone]));
   });
 
   it("finds the KDD version of the Optuna preprint", async function () {
@@ -608,40 +628,78 @@ describe("published versions in DBLP", function () {
     assert.equal(outcome.match.doi, "10.1145/3292500.3330701");
   });
 
-  it("adds a note and a tag", async function () {
+  it("merges the published version when it is already in the library", async function () {
+    await clearPublishedCopies();
     const item = await optunaPreprint();
-    const outcome = await searchPublishedVersion(item, () => {});
-    assert.equal(outcome.kind, "found");
-    if (outcome.kind !== "found") return;
-    await addNoteAndTag(item, outcome.match);
-    await addNoteAndTag(item, outcome.match);
-    assert.isTrue(item.hasTag(PUBLISHED_TAG));
-    assert.lengthOf(item.getNotes(), 1, "applied twice, one note");
-    assert.include(
-      (Zotero.Items.get(item.getNotes()[0]) as Zotero.Item).getNote(),
-      "KDD",
+    const duplicate = new Zotero.Item("conferencePaper");
+    duplicate.setField(
+      "title",
+      "Optuna: A Next-generation Hyperparameter Optimization Framework",
     );
-  });
+    duplicate.setField("DOI", "10.1145/3292500.3330701");
+    duplicate.setCollections([collection.id]);
+    await duplicate.saveTx();
 
-  it("imports the published version as a related item", async function () {
-    const item = await optunaPreprint();
     const outcome = await searchPublishedVersion(item, () => {});
     if (outcome.kind !== "found") throw new Error(outcome.kind);
-    const published = await addAsRelated(item, outcome.match, collection.id);
-    assert.notEqual(published.id, item.id);
-    assert.equal(published.getField("DOI"), "10.1145/3292500.3330701");
-    assert.include(item.relatedItems, published.key);
-    assert.include(published.relatedItems, item.key);
-    // A second time, the imported version is reused.
-    const again = await addAsRelated(
-      await optunaPreprint(),
-      outcome.match,
-      collection.id,
+    const merged = await updateToPublished(item, outcome.match);
+
+    assert.isTrue(merged);
+    // Zotero's merge moves the other item to the trash.
+    assert.isTrue(duplicate.deleted, "duplicate goes to the trash");
+    assert.equal(item.getField("DOI"), "10.1145/3292500.3330701");
+    assert.isTrue(item.inCollection(collection.id));
+  });
+
+  it("keeps the PDF you have when the published full text is the same file", async function () {
+    const item = await optunaPreprint();
+    const holder = await optunaPreprint();
+    const importPDF = async (parentID: number, name: string, body: string) => {
+      const file = Zotero.getTempDirectory().clone();
+      file.append(`${name}.pdf`);
+      await Zotero.File.putContentsAsync(file, body);
+      return Zotero.Attachments.importFromFile({
+        file,
+        parentItemID: parentID,
+        title: name,
+      });
+    };
+    const body =
+      "%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n";
+    const existing = await importPDF(item.id, `pinakes-${item.key}`, body);
+    const downloaded = await importPDF(
+      holder.id,
+      `pinakes-${item.key}-again`,
+      body,
     );
-    assert.equal(again.id, published.id);
+    assert.isTrue(existing.isPDFAttachment());
+
+    // Pretend Zotero's Find Full Text came back with that file.
+    const attachments = Zotero.Attachments as any;
+    const original = attachments.addAvailableFile;
+    let other: Zotero.Item | undefined;
+    try {
+      attachments.addAvailableFile = async () => downloaded;
+      assert.equal(await addPublishedFullText(item), "same");
+
+      // A different document is added next to the one you have.
+      other = await importPDF(
+        holder.id,
+        `pinakes-${item.key}-other`,
+        "%PDF-1.4\n1 0 obj<</Type/Catalog/ViewerPreferences 2 0 R>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n",
+      );
+      attachments.addAvailableFile = async () => other!;
+      assert.equal(await addPublishedFullText(item), "kept");
+    } finally {
+      attachments.addAvailableFile = original;
+    }
+    assert.isFalse(existing.deleted, "the PDF you had is kept");
+    assert.isTrue(downloaded.deleted, "the duplicate download is dropped");
+    assert.isFalse(other!.deleted, "the published PDF is attached");
   });
 
   it("updates an item to the published version, keeping its children", async function () {
+    await clearPublishedCopies();
     const item = await optunaPreprint();
     const note = new Zotero.Item("note");
     note.parentID = item.id;
@@ -674,8 +732,9 @@ describe("published versions in DBLP", function () {
     );
   });
 
-  it("shows the report window and checks the collection", async function () {
-    const report = await openReport(Zotero.getMainWindow(), collection);
+  it("shows the report window and checks the selected items", async function () {
+    const item = await optunaPreprint();
+    const report = await openReport(Zotero.getMainWindow(), [item]);
     try {
       const doc = report.doc;
       (doc.querySelector(".pinakes-check-button") as HTMLElement).click();
@@ -691,7 +750,7 @@ describe("published versions in DBLP", function () {
       );
       assert.match(
         doc.querySelector(".pinakes-apply")?.textContent ?? "",
-        /Apply to selected \(\d+\)/,
+        /Update selected \(\d+\)/,
       );
     } finally {
       report.win.close();

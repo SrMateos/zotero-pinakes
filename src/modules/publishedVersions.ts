@@ -1,13 +1,12 @@
 /**
- * "Find published versions": look up items of a collection in DBLP and,
- * only when the user confirms, record or apply the published version.
- * DBLP (dblp.org) is the only host this file talks to; importing a
- * published version goes through Zotero's translators, as elsewhere.
+ * "Find published versions": look up the selected items in DBLP and, only
+ * when the user confirms, update them to the published version. Searches
+ * go to dblp.org; the published full text is fetched with Zotero's own
+ * "Find Full Text" resolvers, as that command would.
  */
 import { log } from "../utils/log";
 import {
   findPublishedVersion,
-  isPreprintOrUnpublished,
   parseSparql,
   sparqlQuery,
   type DblpOutcome,
@@ -16,7 +15,6 @@ import {
   type ItemInfo,
 } from "./dblp";
 import { arxivFromDOI, normalizeDOI, splitName } from "./identifiers";
-import { importReference, type ImportTarget } from "./importer";
 import { findInLibrary, getPaperId } from "./library";
 import { getJSON, type StatusCallback } from "./sources";
 import type { RefKind, Reference } from "./types";
@@ -29,12 +27,6 @@ import type { RefKind, Reference } from "./types";
 const DBLP_SPARQL = "https://sparql.dblp.org/sparql";
 /** Minimum time between DBLP requests: DBLP asks to be used gently. */
 export const DBLP_SPACING_MS = 700;
-
-/** The tag added by "Add a note and tag". */
-export const PUBLISHED_TAG = "Published version available";
-
-/** Which items of the collection to check. */
-export type CheckScope = "preprints" | "all";
 
 /** Safe getField: "" for fields that are not valid for the type. */
 function field(item: Zotero.Item, name: string): string {
@@ -74,15 +66,24 @@ export function itemInfo(item: Zotero.Item): ItemInfo {
   };
 }
 
-/** The regular items of a collection to check, in title order. */
-export function itemsToCheck(collection: Zotero.Collection, scope: CheckScope) {
-  return collection
-    .getChildItems(false, false)
-    .filter((item) => item.isRegularItem() && !item.deleted)
-    .filter(
-      (item) => scope === "all" || isPreprintOrUnpublished(itemInfo(item)),
-    )
-    .sort((a, b) => field(a, "title").localeCompare(field(b, "title")));
+/**
+ * The regular items to check, in title order. Attachments, notes and
+ * annotations stand for their parent item, and repeats are dropped: the
+ * selection may contain both a paper and its PDF.
+ */
+export function checkableItems(items: Zotero.Item[]) {
+  const chosen = new Map<number, Zotero.Item>();
+  for (const item of items) {
+    let current: Zotero.Item | undefined = item;
+    while (current && !current.isRegularItem()) {
+      current =
+        (current.parentID && Zotero.Items.get(current.parentID)) || undefined;
+    }
+    if (current && !current.deleted) chosen.set(current.id, current);
+  }
+  return [...chosen.values()].sort((a, b) =>
+    field(a, "title").localeCompare(field(b, "title")),
+  );
 }
 
 /** Search DBLP for the item's title and pick the published version. */
@@ -102,10 +103,8 @@ export async function searchPublishedVersion(
 }
 
 // ---------------------------------------------------------------------------
-// Actions, applied only after the user confirms
+// The action, applied only after the user confirms
 // ---------------------------------------------------------------------------
-
-export type PublishedAction = "note" | "related" | "update";
 
 function escape(text: string) {
   return Zotero.Utilities.htmlSpecialChars(text);
@@ -136,23 +135,12 @@ async function addNote(item: Zotero.Item, html: string) {
   return note;
 }
 
-/** Add a child note describing the published version, and a tag. */
-export async function addNoteAndTag(item: Zotero.Item, pub: DblpPublication) {
-  if (item.hasTag(PUBLISHED_TAG)) return;
-  await addNote(
-    item,
-    `<h2>Published version</h2><p>${publicationHTML(pub)}</p><p>Found in DBLP by Pinakes.</p>`,
-  );
-  item.addTag(PUBLISHED_TAG);
-  await item.saveTx();
-}
-
 const DBLP_KIND: Record<string, RefKind> = {
   Article: "journal",
   Inproceedings: "conference",
 };
 
-/** The published version as a Reference, for importReference(). */
+/** The published version as a Reference, to look it up by DOI. */
 function asReference(pub: DblpPublication): Reference {
   return {
     index: 0,
@@ -166,38 +154,16 @@ function asReference(pub: DblpPublication): Reference {
 }
 
 /**
- * Import the published version next to the item (or reuse it if it is in
- * the library already, by DOI) and make the two related items.
+ * The published version already in the library, if any. Match by DOI only:
+ * by title, the item itself would match.
  */
-export async function addAsRelated(
-  item: Zotero.Item,
-  pub: DblpPublication,
-  collectionID?: number,
-) {
-  let published: Zotero.Item | undefined;
-  if (pub.doi) {
-    // Match by DOI only: by title, the item itself would match.
-    const found = await findInLibrary(item.libraryID, [
-      { ...asReference(pub), title: "" },
-    ]);
-    const id = found.get(0);
-    if (id && id !== item.id) published = Zotero.Items.get(id) || undefined;
-  }
-  if (!published) {
-    const target: ImportTarget = {
-      libraryID: item.libraryID,
-      collectionID,
-      label: "",
-    };
-    published = (await importReference(asReference(pub), target)).item;
-  }
-  item.addRelatedItem(published);
-  published.addRelatedItem(item);
-  await Zotero.DB.executeTransaction(async () => {
-    await item.save();
-    await published.save();
-  });
-  return published;
+async function existingVersion(item: Zotero.Item, pub: DblpPublication) {
+  if (!pub.doi) return undefined;
+  const found = await findInLibrary(item.libraryID, [
+    { ...asReference(pub), title: "" },
+  ]);
+  const id = found.get(0);
+  return id && id !== item.id ? Zotero.Items.get(id) || undefined : undefined;
 }
 
 /** Fields never copied from the published version's metadata. */
@@ -272,12 +238,15 @@ async function publishedJSON(
  * Turn the item into its published version: item type, fields and
  * authors come from the published metadata. Attachments, notes, tags,
  * collections and related items are kept; the arXiv ID is kept in Extra,
- * and a note records the previous metadata.
+ * and a note records the previous metadata. If the published version is
+ * already in the library, the duplicate is merged into the item, so no
+ * two copies of the same paper are left. Returns whether it merged one.
  */
 export async function updateToPublished(
   item: Zotero.Item,
   pub: DblpPublication,
 ) {
+  const duplicate = await existingVersion(item, pub);
   const json = await publishedJSON(pub);
   const before = itemInfo(item);
   const previous = [
@@ -333,5 +302,146 @@ export async function updateToPublished(
     `<h2>Updated to the published version</h2><p>${publicationHTML(pub)}</p>` +
       `<p>Before: ${escape(previous.join(", "))}.</p><p>Found in DBLP by Pinakes.</p>`,
   );
+  if (duplicate) {
+    // The published version was in the library already: keep this item
+    // (it has the attachments, notes and collections) and move the
+    // duplicate's own children, tags and collections into it.
+    await Zotero.Items.merge(item, [duplicate]);
+    log(`Merged duplicate item ${duplicate.id} into ${item.id} (${pub.key})`);
+  }
   log(`Updated item ${item.id} to its published version ${pub.key}`);
+  return !!duplicate;
+}
+
+// ---------------------------------------------------------------------------
+// The published full text
+// ---------------------------------------------------------------------------
+
+/** What happened to the published full text. */
+export type FullTextOutcome = "added" | "replaced" | "same" | "kept" | "none";
+
+/** The PDFs attached to the item, trashed ones aside. */
+function attachedPDFs(item: Zotero.Item) {
+  return item
+    .getAttachments()
+    .map((id) => Zotero.Items.get(id))
+    .filter((a): a is Zotero.Item => !!a && a.isPDFAttachment() && !a.deleted);
+}
+
+/**
+ * Zotero's "same document" check for PDFs: a hash of the most common words
+ * in the text. In Zotero 8+ it lives in mergeItems.mjs; Zotero 7 keeps it
+ * on Items. Either way, a PDF without text (a scan) is not comparable.
+ */
+async function textHash(attachment: Zotero.Item): Promise<string | null> {
+  try {
+    const { hashAttachmentText } = ChromeUtils.importESModule(
+      "chrome://zotero/content/mergeItems.mjs",
+    ) as { hashAttachmentText?: (a: Zotero.Item) => Promise<string | null> };
+    if (hashAttachmentText) return await hashAttachmentText(attachment);
+  } catch {
+    // Not this Zotero version.
+  }
+  const legacy = (Zotero.Items as any)._hashAttachmentText;
+  if (typeof legacy === "function") {
+    try {
+      return await legacy.call(Zotero.Items, attachment);
+    } catch {
+      // Same as above: no text to compare.
+    }
+  }
+  return null;
+}
+
+async function sameFile(a: Zotero.Item, b: Zotero.Item) {
+  try {
+    const [left, right] = [await a.attachmentHash, await b.attachmentHash];
+    // A missing file has no hash: two of those are not the same file.
+    return !!left && left === right;
+  } catch {
+    return false;
+  }
+}
+
+async function sameDocument(a: Zotero.Item, b: Zotero.Item) {
+  const [left, right] = [await textHash(a), await textHash(b)];
+  return !!left && left === right;
+}
+
+/**
+ * The rest of the checks Zotero's item merge makes before combining two
+ * PDFs: different link modes stay apart, and a file with annotations
+ * embedded in the PDF is never trashed in favour of another one.
+ */
+async function safeToMerge(old: Zotero.Item, file: Zotero.Item) {
+  if (old.isImportedAttachment() !== file.isImportedAttachment()) return false;
+  if (old.isLinkedFileAttachment() !== file.isLinkedFileAttachment())
+    return false;
+  try {
+    return !(await old.hasEmbeddedAnnotations());
+  } catch {
+    // Could not tell: be safe and keep both.
+    return false;
+  }
+}
+
+/**
+ * Look for the published full text, as Zotero's "Find Full Text" does
+ * (the DOI page, the item's URL, open-access copies, the user's own
+ * resolvers), and adopt it without losing anything:
+ *
+ * - the very same file: it is dropped and the attachment already there is
+ *   kept, annotations included;
+ * - a different file with the same text: the entry replaces the old PDF,
+ *   which is trashed after its annotations move to the new one;
+ * - a different document: it is added next to the old PDF, which keeps
+ *   its annotations.
+ *
+ * Never throws: a failed lookup or download must not undo the update.
+ */
+export async function addPublishedFullText(
+  item: Zotero.Item,
+): Promise<FullTextOutcome> {
+  const before = attachedPDFs(item);
+  let added: Zotero.Item | false;
+  try {
+    // Find Full Text: addAvailableFile() on Zotero 8+, the alias
+    // addAvailablePDF() on Zotero 7.
+    const attachments = Zotero.Attachments as any;
+    const download =
+      attachments.addAvailableFile ?? attachments.addAvailablePDF;
+    if (!download) return "none";
+    added = await download.call(attachments, item);
+  } catch (error) {
+    log(`Full-text lookup failed for item ${item.id}`, error);
+    return "none";
+  }
+  if (!added) return "none";
+  const file = added;
+
+  for (const old of before) {
+    if (await sameFile(old, file)) {
+      await Zotero.DB.executeTransaction(async () => {
+        file.deleted = true;
+        await file.save();
+      });
+      return "same";
+    }
+  }
+  for (const old of before) {
+    if (!(await sameDocument(old, file))) continue;
+    if (!(await safeToMerge(old, file))) continue;
+    // Same text, so the annotations stay on the right pages.
+    await Zotero.DB.executeTransaction(async () => {
+      // Zotero 10 takes options here; Zotero 7 a boolean.
+      await (Zotero.Items.moveChildItems as any)(old, file, {
+        includeTrashed: true,
+      });
+      old.deleted = true;
+      await old.save();
+    });
+    log(`Replaced the PDF of item ${item.id} with the published full text`);
+    return "replaced";
+  }
+  return before.length ? "kept" : "added";
 }
