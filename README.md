@@ -26,6 +26,10 @@ sends no telemetry.
   Cancel button are shown while it runs.
 - **Filter.** Narrow the list by title, author, venue, year, DOI or arXiv
   ID.
+- **Published versions.** Select one or more items, right-click and choose
+  **Pinakes: find published versions…** to find their published versions in
+  DBLP. See
+  [Finding published versions](#finding-published-versions).
 - **PDF fallback.** If no API has the references, Pinakes reads the
   bibliography from the PDF and resolves each entry through Crossref.
 - **Citation popups (experimental).** In the reader, hovering a marker such
@@ -80,6 +84,39 @@ entry. The result:
   were hidden;
 - with no usable PDF, the API order is kept and a note explains why.
 
+## Finding published versions
+
+Many items are arXiv preprints or workshop papers that were later
+published. Select one or more items, right-click, choose **Pinakes: find
+published versions…** and press **Check in DBLP**. Attachments and notes
+stand for their paper, so selecting the PDF works too.
+
+Every selected item is checked, whatever its type, so select just the
+papers you want to look up (Ctrl+A checks the whole list). Only clear
+matches are accepted: the same title (ignoring case and
+punctuation), a year at most one year before or four years after the
+item's, and at least half of the item's authors. When the item has an arXiv
+ID or a DOI, DBLP's record for it is used to find versions whose title is
+written differently. DBLP only covers computer science.
+
+The report lists what was found. Nothing changes until you select items
+and press **Update selected** and confirm it: the item type, fields and
+authors are replaced with the published metadata. Attachments, notes,
+tags, collections and related items are kept, the arXiv ID is kept in
+Extra, and a note records the previous metadata. If the published version
+is already in the library, the two are merged into one item (keeping the
+attachments, notes and collections of both) instead of leaving two copies.
+
+Each updated item then gets the published full text, looked up exactly as
+Zotero's **Find Full Text** does (publisher page, open-access copies,
+your own resolvers):
+
+- with no PDF, the published one is attached;
+- with a PDF that is the same document (Zotero's text check), the new
+  file replaces it and the annotations move over to the new attachment;
+- with a PDF that is a different document (an arXiv version, say), both
+  are kept and the old one keeps its annotations untouched.
+
 ## Where imported items go
 
 | Import target (Settings → Pinakes) | Where the item is created                                                                         |
@@ -107,19 +144,28 @@ so group libraries work. Read-only libraries are refused with an error.
 
 Pinakes itself contacts only these hosts:
 
-| Purpose               | Request                                                                                                                                                                                |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| References (primary)  | `GET https://api.semanticscholar.org/graph/v1/paper/{DOI:<doi>\|ARXIV:<id>}/references?fields=title,authors,year,venue,externalIds,abstract,publicationTypes&offset=<n>&limit=500`     |
-| References (fallback) | `GET https://api.openalex.org/works/doi:<doi>?select=id,referenced_works`, then `GET https://api.openalex.org/works?filter=ids.openalex:<ids>&per-page=50&select=…`                    |
-| PDF fallback only     | `GET https://api.crossref.org/works?query.bibliographic=<entry text>&rows=3&select=DOI,title,author,issued,container-title,type,abstract`, one request per entry, at least 0.6 s apart |
+| Purpose               | Request                                                                                                                                                                                                                                                                                |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| References (primary)  | `GET https://api.semanticscholar.org/graph/v1/paper/{DOI:<doi>\|ARXIV:<id>}/references?fields=title,authors,year,venue,externalIds,abstract,publicationTypes&offset=<n>&limit=500`                                                                                                     |
+| References (fallback) | `GET https://api.openalex.org/works/doi:<doi>?select=id,referenced_works`, then `GET https://api.openalex.org/works?filter=ids.openalex:<ids>&per-page=50&select=…`                                                                                                                    |
+| Published versions    | `GET https://sparql.dblp.org/sparql?query=<SPARQL query>`: DBLP records with the item's title, or sharing the title of the record with its arXiv DOI or DOI. One request per item, at least 0.7 s apart, only when you press **Check in DBLP**                                         |
+| Published full text   | Zotero's own _Find Full Text_, run per updated item after **Update selected**: `POST https://www.zotero.org/services/oa/search` for open-access copies, `GET https://doi.org/<DOI>` and the item's URL (publisher pages), PMC pages, and any custom resolvers you configured in Zotero |
+| PDF fallback only     | `GET https://api.crossref.org/works?query.bibliographic=<entry text>&rows=3&select=DOI,title,author,issued,container-title,type,abstract`, one request per entry, at least 0.6 s apart                                                                                                 |
 
 - **arXiv papers in OpenAlex.** They are looked up by their DataCite DOI,
   `10.48550/arxiv.<id>`.
 - **API key.** If you set a Semantic Scholar API key, it is sent only in
   the `x-api-key` header to `api.semanticscholar.org`.
+- **DBLP.** Pinakes queries DBLP's SPARQL service rather than its search
+  API at `dblp.org/search/publ/api`, which now answers programs with a
+  "Making sure you're not a bot" page instead of JSON.
 - **Import.** Importing runs Zotero's own translators, as _Add Item by
   Identifier_ does. These contact doi.org, Crossref, DataCite or arXiv,
   and may download an open-access PDF.
+- **Published full text.** After updating an item, Pinakes runs Zotero's
+  _Find Full Text_ resolvers for it, which contact Zotero's open-access
+  service, doi.org, the item's URL and, if you configured them, your own
+  resolvers. No request is made when you only run the DBLP check.
 - **Open.** It opens the DOI or arXiv page in your browser.
 
 Nothing else is sent anywhere. Rate limits (HTTP 429) and server errors
@@ -138,35 +184,129 @@ is shown in the section.
 
 ## Development
 
-You need Node.js (LTS) and Zotero 7 or later.
+### Requirements
+
+- Node.js (LTS) and npm
+- Zotero 7 or later, for `npm start` and the integration tests
+
+### First-time setup
+
+After cloning, install the development dependencies. The build tools,
+including the `zotero-plugin` command, live in `node_modules/` and are
+not committed:
 
 ```sh
-npm install
+npm ci                 # installs the exact versions in package-lock.json
 cp .env.example .env   # set the Zotero binary, and a separate profile and data directory
-npm start              # development build with hot reload
-npm run build          # release build: .scaffold/build/pinakes.xpi
-npm test               # unit tests (Node only)
-npm run test:zotero    # integration tests in a throwaway Zotero profile (needs network)
-npm run lint:check
 ```
 
-The integration tests send Zotero's output to
-`.scaffold/test/zotero-output.log`.
+Run `npm ci` again whenever `package-lock.json` changes, for example after
+a pull. Use `npm install <package>` only to add or upgrade a dependency;
+it rewrites the lockfile.
 
-Source overview (`src/modules/`):
+If a script fails with `zotero-plugin: not found` (or `tsc`, `eslint`,
+`prettier: not found`), the dependencies are not installed: run `npm ci`.
 
-| Module                                           | Responsibility                                                |
-| ------------------------------------------------ | ------------------------------------------------------------- |
-| `section.ts`                                     | Item pane section: rendering, filter, import and batch import |
-| `loader.ts`                                      | Cache → APIs → paper order → PDF fallback pipeline            |
-| `sources.ts`                                     | Semantic Scholar and OpenAlex clients, retry and backoff      |
-| `pdf.ts`, `bibliography.ts`, `ordering.ts`       | PDF bibliography, Crossref resolution, paper order            |
-| `library.ts`, `importer.ts`, `selectionGuard.ts` | Library matching, import target and translation               |
-| `citations.ts`, `citationPopups.ts`              | Citation markers and reader popups                            |
-| `identifiers.ts`, `cache.ts`, `dom.ts`           | Shared helpers                                                |
+### Commands
 
-To release, run `npm run release`. It bumps the version, tags the commit
-and pushes. The GitHub workflow then builds the `.xpi` and publishes it.
+| Command               | What it does                                                             |
+| --------------------- | ------------------------------------------------------------------------ |
+| `npm start`           | Development build; starts Zotero with the plugin and reloads on changes. |
+| `npm run build`       | Release build to `.scaffold/build/pinakes.xpi`, then a type check.       |
+| `npm test`            | Unit tests, in Node only.                                                |
+| `npm run test:zotero` | Integration tests in a throwaway Zotero profile (needs network).         |
+| `npm run lint:check`  | Prettier and ESLint, without changing files.                             |
+| `npm run lint:fix`    | Prettier and ESLint, fixing what they can.                               |
+
+`npm start` and `npm run test:zotero` read `.env`. The integration tests
+send Zotero's output to `.scaffold/test/zotero-output.log`.
+
+To try a build in your everyday Zotero, install
+`.scaffold/build/pinakes.xpi` with **Tools → Plugins → Install Plugin From
+File…**.
+
+### Source overview
+
+Modules in `src/modules/`:
+
+| Module                                                  | Responsibility                                                    |
+| ------------------------------------------------------- | ----------------------------------------------------------------- |
+| `section.ts`                                            | Item pane section: rendering, filter, import and batch import     |
+| `loader.ts`                                             | Cache → APIs → paper order → PDF fallback pipeline                |
+| `sources.ts`                                            | Semantic Scholar and OpenAlex clients, retry and backoff          |
+| `pdf.ts`, `bibliography.ts`, `ordering.ts`              | PDF bibliography, Crossref resolution, paper order                |
+| `library.ts`, `importer.ts`, `selectionGuard.ts`        | Library matching, import target and translation                   |
+| `citations.ts`, `citationPopups.ts`                     | Citation markers and reader popups                                |
+| `dblp.ts`, `publishedVersions.ts`, `publishedReport.ts` | Published versions in DBLP: matching, update, merge and full text |
+| `identifiers.ts`, `cache.ts`, `dom.ts`                  | Shared helpers                                                    |
+
+### Continuous integration
+
+Every push to `main` and every pull request runs
+[`ci.yml`](.github/workflows/ci.yml): `npm ci`, lint, unit tests and a
+build. The `.xpi` is kept as a workflow artifact (`pinakes-xpi`) on the
+run's page under **Actions**.
+
+## Releasing
+
+A release is driven by a git tag. Pushing a tag named `v<version>` (for
+example `v1.2.0`) starts [`release.yml`](.github/workflows/release.yml),
+which builds the plugin and publishes it on GitHub.
+
+### Steps
+
+1. Make sure `main` is clean, up to date with `origin` and CI is green.
+2. Run:
+
+   ```sh
+   npm run release
+   ```
+
+   It asks for the new version (patch, minor, major or a pre-release such
+   as `1.2.0-beta.0`) and asks you to confirm. Then it:
+   1. writes the version to `package.json` and `package-lock.json`;
+   2. runs `npm run build`;
+   3. commits as `chore(publish): release v<version>`;
+   4. creates the tag `v<version>`;
+   5. pushes the commit and the tag.
+
+3. Watch the **Release** run in the repository's **Actions** tab. It runs
+   `npm run release` again; on CI this skips the steps above and instead:
+   - creates the GitHub release `v<version>`, with the changelog built
+     from the commit messages since the previous tag, and attaches
+     `pinakes.xpi`;
+   - uploads `update.json` and `update-beta.json` to a special
+     pre-release tagged `release` ("Release Manifest"). Installed copies
+     of Pinakes read that file to find updates, so do not delete it.
+
+Pre-releases (versions with a `-`) are marked as such on GitHub and only
+update `update-beta.json`, so users on `update.json` are not moved to a
+beta.
+
+### Version numbers
+
+Versions follow [semantic versioning](https://semver.org/):
+`major.minor.patch`. Bump the patch for fixes, the minor for new features,
+and the major for changes that break existing behaviour or settings.
+
+### If something goes wrong
+
+- **The commit was pushed but no Release run started.** The tag is
+  missing. Check with `git ls-remote --tags origin`. Create and push it on
+  the release commit:
+
+  ```sh
+  git tag v1.2.0 <release-commit>
+  git push origin v1.2.0
+  ```
+
+- **The Release run failed.** Fix the cause, then rerun it from the
+  Actions tab. If the fix needs a new commit, delete the tag locally and
+  on GitHub (`git tag -d v1.2.0 && git push origin :refs/tags/v1.2.0`),
+  delete the GitHub release if one was created, and release again.
+
+- **Never move a tag that was already published.** Users and Zotero's
+  updater may have the old build. Release a new patch version instead.
 
 ## About the name
 

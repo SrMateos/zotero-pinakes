@@ -180,3 +180,52 @@
 .pinakes-unresolved .pinakes-row-main {
   cursor: default;
 }
+
+/* "Find published versions" report window */
+
+.pinakes-dialog {
+  color-scheme: light dark;
+  margin: 0;
+  padding: 12px 16px;
+  font: message-box;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100vh;
+  box-sizing: border-box;
+}
+
+.pinakes-dialog h1 {
+  font-size: 1.2em;
+  margin: 0 0 4px;
+}
+
+.pinakes-dialog p {
+  margin: 0;
+}
+
+.pinakes-dialog .pinakes-report {
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+.pinakes-dialog-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.pinakes-dialog-footer[hidden] {
+  display: none;
+}
+
+.pinakes-found .pinakes-result {
+  color: var(--accent-green, #2a7d2a);
+}
+
+.pinakes-link {
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}

@@ -7,6 +7,10 @@ import {
 } from "./modules/citationPopups";
 import { invalidateLibraryIndex } from "./modules/library";
 import {
+  registerItemMenu,
+  unregisterItemMenu,
+} from "./modules/publishedReport";
+import {
   refreshLibraryMarks,
   registerSection,
   unregisterSection,
@@ -36,6 +40,7 @@ async function onStartup() {
   });
 
   registerSection();
+  registerItemMenu();
 
   // Items added, edited or trashed anywhere change what is "in library".
   notifierID = Zotero.Notifier.registerObserver(
@@ -97,6 +102,7 @@ function onShutdown(): void {
   unregisterCitationPopups();
   if (marksTimer) clearTimeout(marksTimer);
   unregisterSection();
+  unregisterItemMenu();
   for (const win of Zotero.getMainWindows()) void onMainWindowUnload(win);
   addon.data.alive = false;
   delete (Zotero as unknown as Record<string, unknown>)[config.addonInstance];
