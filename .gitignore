@@ -19,5 +19,6 @@ logs
 papers/
 test/debug/
 
-# Claude Code local state
+# Local agent state
 .claude/
+.opencode/
